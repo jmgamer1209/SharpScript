@@ -1,0 +1,10 @@
+build/
+build-debug/
+build-release/
+out/
+bin/
+obj/
+.vs/
+*.user
+*.suo
+TestResults/
