@@ -71,6 +71,15 @@ const ScriptType& primString() {
 }
 const ScriptType& primVar() { return kVar; }
 
+const ScriptType& primError() {
+    static const ScriptType type = [] {
+        ScriptType value("<error>", Primitive::None);
+        value.error = true;
+        return value;
+    }();
+    return type;
+}
+
 bool ScriptType::isClass() const {
     return object != nullptr && dynamic_cast<ScriptClassType*>(object) != nullptr;
 }
@@ -100,6 +109,8 @@ bool ScriptType::identityOrReferenceAssignableFrom(const ScriptType& other) cons
 
 bool ScriptType::assignableFrom(const ScriptType& other) const {
     if (sameAs(other)) return true;
+    // After a type error the value is "any type": never report conversions.
+    if (isErrorType() || other.isErrorType()) return true;
     if (isVar() || other.isVar()) return true;
     if (other.isNullType()) return isReference();
     if (isArray() || other.isArray()) {

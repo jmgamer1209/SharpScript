@@ -77,6 +77,11 @@ private:
     void report(const std::string& message, const Token& token, const std::string& code = "E0100");
     void synchronize();
     void synchronizeInBlock();
+    /// Runs a parenthesized header (`if (...)`, `for (...;...;...)`, ...) and, on
+    /// a syntax error, skips to the end of the header plus an optional block body
+    /// so one broken header yields one diagnostic.
+    bool parseHeaderSafely(const std::function<void()>& parse);
+    void skipHeaderRemainder();
     bool isTypeStart() const;
     bool isLocalDeclarationStart() const;
     bool isCastStart() const;

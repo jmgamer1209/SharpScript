@@ -396,7 +396,11 @@ void FunctionCompiler::compileLocalDeclaration(const LocalVariableDeclaration& d
                 type = compileExpression(*initializer.value);
             }
         } else {
-            if (!modules_.resolveTypeRef(*declaration.type, initializer, namespaceScope(), type)) type = primI32();
+            if (!modules_.resolveTypeRef(*declaration.type, *declaration.type, namespaceScope(), type)) {
+                // Report at the type, and keep using the sentinel so the value
+                // stays compatible with anything (no cascade of conversions).
+                type = primError();
+            }
             if (type.isVoid()) {
                 modules_.error("E0387", "variable '" + initializer.name + "' cannot have type 'void'",
                                initializer);
@@ -1193,6 +1197,11 @@ ScriptType FunctionCompiler::compileStaticMember(const MemberExpression& member,
 }
 
 ScriptType FunctionCompiler::emitMemberLoad(const MemberExpression& member, const ScriptType& targetType) {
+    if (targetType.isErrorType()) {
+        emit(OpCode::Pop, 0, -1);
+        emitDefault(primError());
+        return primError();
+    }
     if (auto* cls = dynamic_cast<ScriptClassType*>(targetType.object)) {
         if (auto* field = cls->findField(member.memberName)) {
             emitLoadField(field);
@@ -1441,6 +1450,12 @@ ScriptType FunctionCompiler::compileMemberCall(const MemberExpression& member, c
     }
 
     auto targetType = compileExpression(*member.target);
+    if (targetType.isErrorType()) {
+        // The receiver's type is already broken; do not add "no such method".
+        emit(OpCode::Pop, 0, -1);
+        emitDefault(primError());
+        return primError();
+    }
 
     if (auto* cls = dynamic_cast<ScriptClassType*>(targetType.object)) {
         auto candidates = instanceMethods(cls, member.memberName, call.arguments.size());
@@ -2831,6 +2846,7 @@ bool FunctionCompiler::canImplicitlyConvert(const ScriptType& from, const Script
 void FunctionCompiler::emitConversion(const ScriptType& from, const ScriptType& to, const Node& node,
                                       bool explicitCast) {
     if (to.isVar() || from.sameAs(to) || to.isVoid()) return;
+    if (from.isErrorType() || to.isErrorType()) return;   // already reported
 
     if (from.isNullType()) {
         if (!to.isReference()) modules_.error("E0374", "cannot convert 'null' to '" + to.name + "'", node);

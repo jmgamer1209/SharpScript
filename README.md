@@ -937,7 +937,7 @@ build\Release\sharpscript_tests.exe
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-当前：**133 passed, 0 failed**。
+当前：**138 passed, 0 failed**。
 
 覆盖：算术/位运算/浮点、类型转换、字符串（UTF-16 长度/索引、PascalCase 方法、`null` 语义）、控制流、递归、全局初始化、
 类/继承/虚派发/静态成员、数组、命名空间（嵌套、using、静态成员、同名类型、file-scoped、热重载配对）、

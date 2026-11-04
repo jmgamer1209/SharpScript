@@ -36,6 +36,10 @@ public:
     std::vector<ScriptType> typeArguments;
     /// Template name for instantiated generic types (`Box`), empty otherwise.
     std::string templateName;
+    /// Recovery sentinel set when a declared type failed to resolve: values of
+    /// this type convert to and from anything so a single mistake does not
+    /// produce a cascade of follow-on diagnostics.
+    bool error = false;
 
     ScriptType() = default;
     ScriptType(std::string name, Primitive primitive, ScriptObjectType* object = nullptr)
@@ -45,6 +49,7 @@ public:
     bool isVoid() const { return primitive == Primitive::Void; }
     bool isNullType() const { return primitive == Primitive::Null; }
     bool isVar() const { return primitive == Primitive::Var; }
+    bool isErrorType() const { return error; }
     bool isPrimitive() const { return object == nullptr && !isArray(); }
     bool isBool() const { return primitive == Primitive::Bool; }
     bool isString() const { return primitive == Primitive::String; }
@@ -98,6 +103,8 @@ const ScriptType& primF64();
 const ScriptType& primChar();
 const ScriptType& primString();
 const ScriptType& primVar();
+/// Sentinel used after a type error: accepts any value without diagnostics.
+const ScriptType& primError();
 
 class ScriptObjectType {
 public:

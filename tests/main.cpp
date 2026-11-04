@@ -2176,6 +2176,81 @@ void main() {
     });
 }
 
+void testDiagnosticQuality() {
+    auto collect = [](const std::string& source) {
+        auto harness = std::make_unique<TestEngine>();
+        std::vector<Diagnostic> diagnostics;
+        auto module = harness->engine->tryLoadModule("bad", source, "bad.ss", diagnostics);
+        expectTrue(module == nullptr, "expected a compile failure");
+        return diagnostics;
+    };
+
+    test("a broken declaration header reports once", [&] {
+        auto diagnostics = collect(R"(
+void a()1
+{
+    print(1);
+    if (true) { print(2); }
+}
+void b() { print(3); }
+void main() { b(); }
+)");
+        expectEqual(std::size_t{1}, diagnostics.size(), "recovery must not reinterpret the body");
+        expectEqual(std::string("E0100"), diagnostics[0].code, "code");
+        expectEqual(2, diagnostics[0].line, "line");
+    });
+
+    test("a mistyped declaration type reports once", [&] {
+        auto diagnostics = collect(R"(
+void main() {
+    string1 text = "hello";
+    print(text.Length);
+}
+)");
+        expectEqual(std::size_t{1}, diagnostics.size(), "no conversion/member cascade");
+        expectEqual(std::string("E0215"), diagnostics[0].code, "code");
+        expectEqual(3, diagnostics[0].line, "type line");
+        expectEqual(5, diagnostics[0].column, "points at the type, not the name");
+    });
+
+    test("a broken statement reports once", [&] {
+        auto diagnostics = collect(R"(
+void main() {
+    int total = 0;
+    foreach (var n in2 numbers) {
+        total += n;
+    }
+    print(total);
+    for (int i = 0; i < 3; i++) {
+        total += i;
+    }
+}
+)");
+        expectEqual(std::size_t{1}, diagnostics.size(), "recovery must resume after the block");
+        expectEqual(4, diagnostics[0].line, "line of the broken foreach");
+    });
+
+    test("a broken for header reports once", [&] {
+        auto diagnostics = collect(R"(
+void main() {
+    int total = 0;
+    for (int i == 0; i < 3; i++) {
+        total += i;
+    }
+    print(total);
+}
+)");
+        expectEqual(std::size_t{1}, diagnostics.size(), "the header is recovered as a unit");
+        expectEqual(4, diagnostics[0].line, "for line");
+    });
+
+    test("a statement outside a function is explained", [&] {
+        auto diagnostics = collect("void main() { print(1); }\nprint(2);\n");
+        expectEqual(std::size_t{1}, diagnostics.size(), "single diagnostic");
+        expectContains(diagnostics[0].message, "looks like a function call");
+    });
+}
+
 void testFinalizers() {
     test("finalizers run after the invocation with intact fields", [] {
         expectOutput(R"(
@@ -3428,6 +3503,7 @@ int main() {
     testFuncAction();
     testScriptStandardLibrary();
     testSections();
+    testDiagnosticQuality();
     testFinalizers();
     testFinally();
     testExceptions();

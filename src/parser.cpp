@@ -87,24 +87,90 @@ void Parser::report(const std::string& message, const Token& token, const std::s
     diagnostics_.error(code, message, token.line, token.column);
 }
 
+/// Panic-mode recovery at declaration level.
+///
+/// A `{ ... }` block is skipped **including its braces**: after a broken
+/// declaration header (`void main()1 { ... }`) the body must not be reinterpreted
+/// as top-level declarations, which was the source of long cascades.
 void Parser::synchronize() {
+    int depth = 0;
     while (!atEnd()) {
-        if (current().type == TokenType::Semicolon) {
+        if (current().type == TokenType::LBrace) {
+            ++depth;
+            advance();
+            continue;
+        }
+        if (current().type == TokenType::RBrace) {
+            if (depth == 0) return;   // let the enclosing context report it
+            --depth;
+            advance();
+            if (depth == 0) return;   // the skipped block is closed: resume here
+            continue;
+        }
+        if (depth == 0 && current().type == TokenType::Semicolon) {
             advance();
             return;
         }
-        if (current().type == TokenType::RBrace) return;
         advance();
     }
 }
 
+/// Statement-level panic-mode recovery: same contract as `synchronize`, but a
+/// `}` at depth 0 belongs to the enclosing block and is left for its caller.
 void Parser::synchronizeInBlock() {
-    while (!atEnd() && current().type != TokenType::RBrace) {
-        if (current().type == TokenType::Semicolon) {
+    int depth = 0;
+    while (!atEnd()) {
+        if (current().type == TokenType::LBrace) {
+            ++depth;
+            advance();
+            continue;
+        }
+        if (current().type == TokenType::RBrace) {
+            if (depth == 0) return;   // end of the enclosing block
+            --depth;
+            advance();
+            if (depth == 0) return;   // the skipped block is closed: resume here
+            continue;
+        }
+        if (depth == 0 && current().type == TokenType::Semicolon) {
             advance();
             return;
         }
         advance();
+    }
+}
+
+/// Skips to the `)` that closes the header whose `(` was already consumed, then
+/// skips a `{ ... }` body if one follows.
+void Parser::skipHeaderRemainder() {
+    int parens = 1;
+    while (!atEnd() && parens > 0) {
+        if (current().type == TokenType::LParen) ++parens;
+        else if (current().type == TokenType::RParen) --parens;
+        advance();
+    }
+    if (current().type != TokenType::LBrace) return;
+    int braces = 0;
+    while (!atEnd()) {
+        if (current().type == TokenType::LBrace) {
+            ++braces;
+        } else if (current().type == TokenType::RBrace) {
+            --braces;
+            advance();
+            if (braces == 0) return;
+            continue;
+        }
+        advance();
+    }
+}
+
+bool Parser::parseHeaderSafely(const std::function<void()>& parse) {
+    try {
+        parse();
+        return true;
+    } catch (const ParseAbort&) {
+        skipHeaderRemainder();
+        return false;
     }
 }
 
@@ -255,6 +321,14 @@ std::unique_ptr<Declaration> Parser::parseTopLevelDeclaration() {
     const Token typeStart = current();
     TypeRef type = parseType();
     Token nameToken = current();
+    if (current().type == TokenType::LParen) {
+        // `foo(...)` at declaration level is a statement that leaked out of a
+        // broken function body; saying so is more useful than "expected name".
+        report("expected a declaration, but '" + type.displayName() +
+                   "(...)' looks like a function call (statements must be inside a method)",
+               nameToken);
+        throw ParseAbort{};
+    }
     std::string name = expectIdentifier("declaration name");
     std::vector<TypeParameter> typeParameters = parseTypeParameters();
 
@@ -765,8 +839,13 @@ StmtPtr Parser::parseStatement() {
     if (token.is("if")) {
         advance();
         expect(TokenType::LParen, "'('");
-        auto condition = parseExpression();
-        expect(TokenType::RParen, "')'");
+        ExprPtr condition;
+        if (!parseHeaderSafely([&] {
+                condition = parseExpression();
+                expect(TokenType::RParen, "')'");
+            })) {
+            return std::make_unique<EmptyStatement>();
+        }
         auto thenBranch = parseStatement();
         StmtPtr elseBranch;
         if (matchWord("else")) elseBranch = parseStatement();
@@ -782,8 +861,13 @@ StmtPtr Parser::parseStatement() {
     if (token.is("while")) {
         advance();
         expect(TokenType::LParen, "'('");
-        auto condition = parseExpression();
-        expect(TokenType::RParen, "')'");
+        ExprPtr condition;
+        if (!parseHeaderSafely([&] {
+                condition = parseExpression();
+                expect(TokenType::RParen, "')'");
+            })) {
+            return std::make_unique<EmptyStatement>();
+        }
         auto body = parseStatement();
         auto statement = std::make_unique<WhileStatement>();
         statement->line = token.line;
@@ -816,26 +900,31 @@ StmtPtr Parser::parseStatement() {
         statement->line = token.line;
         statement->column = token.column;
 
-        if (current().type != TokenType::Semicolon) {
-            if (isLocalDeclarationStart()) {
-                statement->initializer = parseLocalDeclaration(true);
+        // The three header parts are separated by ';': recovering inside the
+        // header would report each separator again, so treat it as a unit.
+        const bool headerOk = parseHeaderSafely([&] {
+            if (current().type != TokenType::Semicolon) {
+                if (isLocalDeclarationStart()) {
+                    statement->initializer = parseLocalDeclaration(true);
+                } else {
+                    auto expression = parseExpression();
+                    expect(TokenType::Semicolon, "';'");
+                    auto initializer = std::make_unique<ExpressionStatement>();
+                    initializer->line = expression->line;
+                    initializer->column = expression->column;
+                    initializer->expression = std::move(expression);
+                    statement->initializer = std::move(initializer);
+                }
             } else {
-                auto expression = parseExpression();
-                expect(TokenType::Semicolon, "';'");
-                auto initializer = std::make_unique<ExpressionStatement>();
-                initializer->line = expression->line;
-                initializer->column = expression->column;
-                initializer->expression = std::move(expression);
-                statement->initializer = std::move(initializer);
+                advance();
             }
-        } else {
-            advance();
-        }
 
-        if (current().type != TokenType::Semicolon) statement->condition = parseExpression();
-        expect(TokenType::Semicolon, "';'");
-        if (current().type != TokenType::RParen) statement->iterator = parseExpression();
-        expect(TokenType::RParen, "')'");
+            if (current().type != TokenType::Semicolon) statement->condition = parseExpression();
+            expect(TokenType::Semicolon, "';'");
+            if (current().type != TokenType::RParen) statement->iterator = parseExpression();
+            expect(TokenType::RParen, "')'");
+        });
+        if (!headerOk) return std::make_unique<EmptyStatement>();
         statement->body = parseStatement();
         return statement;
     }
@@ -844,16 +933,23 @@ StmtPtr Parser::parseStatement() {
         advance();
         expect(TokenType::LParen, "'('");
         std::optional<TypeRef> elementType;
-        if (current().is("var")) {
-            advance();
-        } else {
-            elementType = parseType();
+        Token nameToken = token;
+        std::string name;
+        ExprPtr collection;
+        if (!parseHeaderSafely([&] {
+                if (current().is("var")) {
+                    advance();
+                } else {
+                    elementType = parseType();
+                }
+                nameToken = current();
+                name = expectIdentifier("loop variable name");
+                expectWord("in");
+                collection = parseExpression();
+                expect(TokenType::RParen, "')'");
+            })) {
+            return std::make_unique<EmptyStatement>();
         }
-        Token nameToken = current();
-        std::string name = expectIdentifier("loop variable name");
-        expectWord("in");
-        auto collection = parseExpression();
-        expect(TokenType::RParen, "')'");
         auto statement = std::make_unique<ForeachStatement>();
         statement->line = nameToken.line;
         statement->column = nameToken.column;
@@ -867,8 +963,13 @@ StmtPtr Parser::parseStatement() {
     if (token.is("switch")) {
         advance();
         expect(TokenType::LParen, "'('");
-        auto value = parseExpression();
-        expect(TokenType::RParen, "')'");
+        ExprPtr value;
+        if (!parseHeaderSafely([&] {
+                value = parseExpression();
+                expect(TokenType::RParen, "')'");
+            })) {
+            return std::make_unique<EmptyStatement>();
+        }
         expect(TokenType::LBrace, "'{'");
         auto statement = std::make_unique<SwitchStatement>();
         statement->line = token.line;
