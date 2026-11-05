@@ -2,6 +2,7 @@
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -4132,6 +4133,24 @@ void main() { print("x" + value); }
         expectContains(dump, "CallNativeVariadic");
         expectContains(dump, "Ret");
         expectContains(dump, "value");
+    });
+
+    test("bytecode can be written straight to a stream", [] {
+        TestEngine harness;
+        auto module = harness.load("void main() { print(1); }", "stream_dump");
+
+        // `writeModule` is what `disasm --out file` uses; it must match the string API.
+        std::ostringstream streamed;
+        Disassembler::writeModule(*module, streamed);
+        expectEqual(Disassembler::disassembleModule(*module), streamed.str());
+        expectTrue((streamed.flags() & std::ios_base::adjustfield) != std::ios_base::left,
+                   "stream formatting flags should be restored");
+
+        auto* function = module->entryPoint;
+        expectTrue(function != nullptr, "expected an entry point");
+        std::ostringstream single;
+        Disassembler::write(*function, single);
+        expectEqual(Disassembler::disassemble(*function), single.str());
     });
 
     test("compiled function has code, constants and line map", [] {

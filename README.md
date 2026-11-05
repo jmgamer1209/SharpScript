@@ -39,6 +39,7 @@ build\Release\sharpscript_cli.exe run samples/interfaces.cs
 build\Release\sharpscript_cli.exe run samples/collections.cs
 build\Release\sharpscript_cli.exe run samples/module_main.cs samples/module_player.cs
 build\Release\sharpscript_cli.exe disasm samples/hello.cs
+build\Release\sharpscript_cli.exe disasm samples/hello.cs --out build/hello.bytecode.txt
 build\Release\sharpscript_cli.exe reload samples/hotreload.cs samples/hotreload.v2.cs
 build\Release\sharpscript_cli.exe watch samples/hotreload.cs
 build\Release\sharpscript_cli.exe repl
@@ -147,7 +148,7 @@ lib/array.cs           标准库：Array<T>（构建期嵌入，每个文件一�
 lib/list.cs            标准库：List<T>
 lib/dictionary.cs      标准库：Dictionary<K,V>
 cli/main.cpp           run / watch / reload / disasm / repl
-tests/main.cpp         控制台测试运行器（158 个用例）
+tests/main.cpp         控制台测试运行器（159 个用例）
 samples/               示例脚本（基础/接口/集合/泛型/异常/热重载…）
 ```
 
@@ -800,6 +801,30 @@ class Demo
 数组只保留存储原语（`NewArray` / `LoadElem` / `StoreElem` / `Length`）：增长、插入、查找等算法全部在
 `lib/array.cs` 的 `Array<T>` 里用脚本实现，VM 不再有任何集合算法指令。
 
+`disasm` 默认打印到标准输出；加 `--out <文件>`（或 `-o`）把同一份字节码清单写入文件，
+方便存档、diff 或喂给外部脚本：
+
+```powershell
+sharpscript_cli disasm samples/hello.cs --out build/hello.bytecode.txt
+# wrote build/hello.bytecode.txt (9 functions, 4 classes)
+
+# 多文件模块同样适用
+sharpscript_cli disasm samples/module_main.cs samples/module_player.cs --out build/module.txt
+
+# 标准库全是泛型模板（按类型实参单态化），未实例化时只有模块头；
+# 这条命令主要用来确认「关掉内置库后这三份脚本仍能编译」
+sharpscript_cli --no-stdlib disasm lib/array.cs lib/list.cs lib/dictionary.cs
+```
+
+宿主不经过 CLI 时用同一套 API（`write*` 直接写任意 `std::ostream`，无需先拼字符串）：
+
+```cpp
+std::ofstream file("game.bytecode.txt");
+Disassembler::writeModule(*module, file);          // 整个模块
+Disassembler::write(*module->entryPoint, file);    // 单个函数
+std::string text = Disassembler::disassembleModule(*module);   // 需要字符串时
+```
+
 `disasm` 输出示例：
 
 ```text
@@ -1104,7 +1129,7 @@ build\Release\sharpscript_tests.exe
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-当前：**158 passed, 0 failed**（脚本用例）。`ctest` 共 **16 项**：
+当前：**159 passed, 0 failed**（脚本用例）。`ctest` 共 **16 项**：
 1 个单元测试（`sharpscript_tests`）+ 14 个样例 smoke（`sample_*`，逐个 `run` 并检查退出码）+ 1 个 `csharp_compat`
 （用 `dotnet build` 校验 `lib/*.cs` 与 `samples/*.cs` 是合法 C#）。
 

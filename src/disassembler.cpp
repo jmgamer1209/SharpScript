@@ -65,6 +65,13 @@ std::string formatConstant(const Value& value) {
 
 std::string Disassembler::disassemble(const ScriptFunction& function, bool includeHeader) {
     std::ostringstream out;
+    write(function, out, includeHeader);
+    return out.str();
+}
+
+void Disassembler::write(const ScriptFunction& function, std::ostream& out, bool includeHeader) {
+    // Listing leaves the stream left-aligned; restore it for the caller's sake.
+    const std::ios_base::fmtflags flags = out.flags();
     if (includeHeader) {
         out << "// " << function.signature() << "\n";
         out << "// code=" << function.code.size() << " words, locals=" << function.localSlotCount
@@ -147,11 +154,17 @@ std::string Disassembler::disassemble(const ScriptFunction& function, bool inclu
         if (!comment.empty()) out << "  ; " << comment;
         out << "\n";
     }
-    return out.str();
+    out.flags(flags);
 }
 
 std::string Disassembler::disassembleModule(const ScriptModule& module) {
     std::ostringstream out;
+    writeModule(module, out);
+    return out.str();
+}
+
+void Disassembler::writeModule(const ScriptModule& module, std::ostream& out) {
+    const std::ios_base::fmtflags flags = out.flags();
     out << "module " << module.name << " (generation " << module.generation << ")\n";
     if (!module.globals.empty()) {
         out << "globals:\n";
@@ -173,9 +186,10 @@ std::string Disassembler::disassembleModule(const ScriptModule& module) {
         }
     }
     for (const auto& function : module.functions) {
-        out << "\n" << disassemble(*function);
+        out << "\n";
+        write(*function, out);
     }
-    return out.str();
+    out.flags(flags);
 }
 
 }  // namespace sharpscript
