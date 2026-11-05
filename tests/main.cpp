@@ -2192,6 +2192,160 @@ void main() {
     });
 }
 
+void testInterfaces() {
+    test("interfaces declare signatures and classes implement them", [] {
+        expectOutput(R"(
+using System;
+
+interface IShape
+{
+    double Area();
+    string Name { get; }
+}
+
+class Circle : IShape
+{
+    public double radius;
+    public Circle(double radius) { this.radius = radius; }
+    public double Area() { return 3.0 * radius * radius; }
+    public string Name { get { return "circle"; } }
+}
+
+class Square : IShape
+{
+    public double side;
+    public Square(double side) { this.side = side; }
+    public double Area() { return side * side; }
+    public string Name { get { return "square"; } }
+}
+
+class Program
+{
+    public static void Main()
+    {
+        IShape[] shapes = new IShape[2];
+        shapes[0] = new Circle(2.0);
+        shapes[1] = new Square(3.0);
+        foreach (var shape in shapes)
+        {
+            Console.WriteLine(shape.Name + " " + shape.Area());
+        }
+        IShape first = shapes[0];
+        Console.WriteLine(first is Circle);
+        Console.WriteLine(first is Square);
+        Circle cast = first as Circle;
+        Console.WriteLine(cast.radius);
+    }
+})",
+                     {"circle 12", "square 9", "True", "False", "2"});
+    });
+
+    test("interface inheritance and implementations are checked", [] {
+        expectOutput(R"(
+interface IShape { double Area(); }
+interface INamed : IShape { string Describe(); }
+
+class Circle : INamed
+{
+    public string Describe() { return "circle " + Area(); }
+    public double Area() { return 5.0; }
+}
+
+void main() {
+    INamed named = new Circle();
+    print(named.Describe());
+    IShape shape = named;
+    print(shape.Area());
+})",
+                     {"circle 5", "5"});
+    });
+
+    test("interface misuse is diagnosed", [] {
+        auto expectDiagnostic = [](const std::string& source, const std::string& code) {
+            TestEngine harness;
+            std::vector<Diagnostic> diagnostics;
+            auto module = harness.engine->tryLoadModule("bad", source, "bad.cs", diagnostics);
+            expectTrue(module == nullptr, "expected compilation failure for " + code);
+            bool found = false;
+            std::string all;
+            for (const auto& diagnostic : diagnostics) {
+                all += diagnostic.toString() + "\n";
+                if (diagnostic.code == code) found = true;
+            }
+            if (!found) throw std::runtime_error("expected diagnostic " + code + ", got:\n" + all);
+        };
+
+        expectDiagnostic("interface IFoo { void Run(); } class A : IFoo { } void main() { }", "E0460");
+        expectDiagnostic("class A : IMissing { } void main() { }", "E0203");
+        expectDiagnostic(
+            "interface IFoo { void Run(); } class A : IFoo { public void Run() { } } "
+            "void main() { A a = new A(); IFoo f = a; A back = f; }",
+            "E0381");
+        expectDiagnostic("interface IFoo { void Run(); } void main() { IFoo f = new IFoo(); }", "E0465");
+        expectDiagnostic("interface IFoo { void Run() { } } void main() { }", "E0100");
+        expectDiagnostic("interface IFoo { public int x = 1; } void main() { }", "E0100");
+    });
+
+    test("using disposes the resource even when the body throws", [] {
+        expectOutput(R"(
+using System;
+
+class Resource : IDisposable
+{
+    public string name;
+    public Resource(string name) { this.name = name; Console.WriteLine("open " + name); }
+    public void Dispose() { Console.WriteLine("close " + name); }
+}
+
+void main() {
+    using (Resource a = new Resource("a"))
+    {
+        Console.WriteLine("work " + a.name);
+    }
+    try
+    {
+        using (Resource b = new Resource("b"))
+        {
+            throw new Exception("boom");
+        }
+    }
+    catch (Exception e)
+    {
+        Console.WriteLine("caught " + e.Message);
+    }
+    using (Resource none = null)
+    {
+        Console.WriteLine("skipped");
+    }
+})",
+                     {"open a", "work a", "close a", "open b", "close b", "caught boom", "skipped"});
+    });
+
+    test("foreach uses the GetEnumerator protocol", [] {
+        expectOutput(R"(
+using System;
+
+void main() {
+    Array<int> numbers = new Array<int>();
+    numbers.Add(3);
+    numbers.Add(5);
+    numbers.Add(7);
+    int total = 0;
+    foreach (var n in numbers)
+    {
+        total = total + n;
+    }
+    print(total);
+
+    Array<string> names = new Array<string>();
+    names.Add("a");
+    names.Add("b");
+    foreach (var s in names) print(s);
+})",
+                     {"15", "a", "b"});
+    });
+}
+
 void testProperties() {
     test("auto and explicit property accessors", [] {
         expectOutput(R"(
@@ -3620,6 +3774,7 @@ int main() {
     testFuncAction();
     testScriptStandardLibrary();
     testSections();
+    testInterfaces();
     testProperties();
     testDiagnosticQuality();
     testFinalizers();

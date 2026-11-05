@@ -153,7 +153,9 @@ void ScriptEngine::initializeConsoleType() {
     NativeObjectType* typePointer = &console;
 
     auto emit = [this](const Value& value, bool newline) {
-        std::string line = value.display();
+        // C# prints booleans as True/False (`print` keeps the script-side form).
+        std::string line = value.kind() == ValueKind::Bool ? (value.asBool() ? "True" : "False")
+                                                           : value.display();
         if (newline) {
             if (settings.output) {
                 settings.output(line);

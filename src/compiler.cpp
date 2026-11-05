@@ -285,7 +285,20 @@ void ModuleCompiler::compile() {
     resolveEntryPoint();
 
     std::unordered_map<ScriptClassType*, bool> visited;
-    for (auto& cls : module_->classes) ensureConstructor(*cls, visited);
+    for (auto& cls : module_->classes) {
+        // Interfaces are never instantiated.
+        if (cls->isInterface) continue;
+        ensureConstructor(*cls, visited);
+    }
+
+    // Interface slots are module-wide: pad tables of classes that were laid out
+    // before the last interface was seen.
+    for (auto& cls : module_->classes) {
+        if (cls->isInterface) continue;
+        if (cls->interfaceVtable.size() < static_cast<std::size_t>(interfaceSlotCount_)) {
+            cls->interfaceVtable.resize(static_cast<std::size_t>(interfaceSlotCount_), nullptr);
+        }
+    }
 
     compilingBodies_ = true;
     compilePendingBodies();
@@ -452,7 +465,11 @@ void ModuleCompiler::layoutClass(const ClassDeclaration& declaration) {
         return;
     }
     layoutInProgress_.insert(&declaration);
+    cls.isInterface = declaration.isInterface;
 
+    // `class A : B, IFoo` — the first name may be a class *or* an interface, and
+    // C# decides by what it resolves to.
+    std::vector<std::string> interfaceNames = declaration.interfaceNames;
     if (declaration.baseName.has_value()) {
         ScriptType baseType;
         if (!resolveTypeNameInScope(*declaration.baseName, declaration.namespacePath, baseType) ||
@@ -469,7 +486,9 @@ void ModuleCompiler::layoutClass(const ClassDeclaration& declaration) {
                     break;
                 }
             }
-            if (baseClass == &cls) {
+            if (baseClass->isInterface) {
+                interfaceNames.insert(interfaceNames.begin(), *declaration.baseName);
+            } else if (baseClass == &cls) {
                 error("E0204", "class '" + declaration.name + "' cannot inherit from itself", declaration);
             } else if (baseDeclaration == nullptr) {
                 error("E0205", "base class '" + baseClass->name + "' must be declared in the same module",
@@ -481,7 +500,7 @@ void ModuleCompiler::layoutClass(const ClassDeclaration& declaration) {
         }
     }
 
-    if (cls.base != nullptr) {
+    if (cls.base != nullptr && !cls.isInterface) {
         for (const auto& field : cls.base->fields) {
             cls.fieldIndex[field.name] = static_cast<int>(cls.fields.size());
             cls.fields.push_back(field);
@@ -496,6 +515,35 @@ void ModuleCompiler::layoutClass(const ClassDeclaration& declaration) {
             layoutMethod(cls, *function);
         } else if (auto* nested = dynamic_cast<ClassDeclaration*>(memberPtr.get())) {
             error("E0206", "nested classes are not supported ('" + nested->name + "')", *nested);
+        }
+    }
+
+    // Interfaces: bind every signature to a concrete implementation.
+    if (cls.isInterface) {
+        for (const auto& interfaceName : interfaceNames) {
+            ScriptType baseType;
+            if (!resolveTypeNameInScope(interfaceName, declaration.namespacePath, baseType)) continue;
+            auto* baseInterface = dynamic_cast<ScriptClassType*>(baseType.object);
+            if (baseInterface == nullptr || !baseInterface->isInterface) continue;
+            for (auto* transitive : baseInterface->interfaces) addInterface(cls, transitive);
+            addInterface(cls, baseInterface);
+        }
+    } else {
+        for (const auto& interfaceName : interfaceNames) {
+            ScriptType interfaceType;
+            auto* interfaceClass = dynamic_cast<ScriptClassType*>(interfaceType.object);
+            if (!resolveTypeNameInScope(interfaceName, declaration.namespacePath, interfaceType)) {
+                interfaceClass = builtinInterface(interfaceName);
+                if (interfaceClass == nullptr) {
+                    error("E0462", "unknown interface '" + interfaceName + "'", declaration);
+                    continue;
+                }
+            } else if ((interfaceClass = dynamic_cast<ScriptClassType*>(interfaceType.object)) == nullptr ||
+                       !interfaceClass->isInterface) {
+                error("E0463", "'" + interfaceName + "' is not an interface", declaration);
+                continue;
+            }
+            bindInterface(cls, *interfaceClass, declaration);
         }
     }
 
@@ -530,6 +578,109 @@ void ModuleCompiler::layoutClass(const ClassDeclaration& declaration) {
 
     layoutInProgress_.erase(&declaration);
     laidOut_.insert(&declaration);
+}
+
+void ModuleCompiler::addInterface(ScriptClassType& cls, ScriptClassType* interfaceClass) {
+    for (auto* existing : cls.interfaces) {
+        if (existing == interfaceClass) return;
+    }
+    cls.interfaces.push_back(interfaceClass);
+}
+
+int ModuleCompiler::interfaceSlotFor(const ScriptClassType& interfaceClass, const std::string& signatureKey) {
+    const std::string key = interfaceClass.name + "|" + signatureKey;
+    auto it = interfaceSlots_.find(key);
+    if (it != interfaceSlots_.end()) return it->second;
+    const int slot = interfaceSlotCount_++;
+    interfaceSlots_[key] = slot;
+    return slot;
+}
+
+std::string ModuleCompiler::interfaceSignature(const FunctionDeclaration& declaration) {
+    std::string key = declaration.name + "(";
+    for (std::size_t i = 0; i < declaration.parameters.size(); ++i) {
+        if (i > 0) key += ",";
+        key += declaration.parameters[i].type.displayName();
+    }
+    key += ")";
+    return key;
+}
+
+void ModuleCompiler::bindInterface(ScriptClassType& cls, ScriptClassType& interfaceClass,
+                                   const ClassDeclaration& declaration) {
+    for (auto* transitive : interfaceClass.interfaces) bindInterface(cls, *transitive, declaration);
+    addInterface(cls, &interfaceClass);
+
+    for (auto& entry : interfaceClass.methods) {
+        for (auto* signature : entry.second) {
+            if (signature->interfaceSlot < 0) continue;
+            ScriptFunction* implementation = nullptr;
+            for (ScriptClassType* current = &cls; current != nullptr && implementation == nullptr;
+                 current = current->base) {
+                auto it = current->methods.find(signature->name);
+                if (it == current->methods.end()) continue;
+                for (auto* candidate : it->second) {
+                    if (candidate == signature) continue;
+                    if (candidate->isStatic) continue;
+                    if (candidate->parameters.size() != signature->parameters.size()) continue;
+                    bool matches = candidate->returnType.sameAs(signature->returnType);
+                    for (std::size_t i = 0; matches && i < candidate->parameters.size(); ++i) {
+                        matches = candidate->parameters[i].type.sameAs(signature->parameters[i].type);
+                    }
+                    if (matches) {
+                        implementation = candidate;
+                        break;
+                    }
+                }
+            }
+            if (implementation == nullptr) {
+                error("E0460",
+                      "class '" + cls.name + "' does not implement '" + interfaceClass.name + "." +
+                          signature->name + "' required by the interface",
+                      declaration);
+                continue;
+            }
+            const std::size_t slot = static_cast<std::size_t>(signature->interfaceSlot);
+            if (cls.interfaceVtable.size() <= slot) cls.interfaceVtable.resize(slot + 1, nullptr);
+            cls.interfaceVtable[slot] = implementation;
+        }
+    }
+}
+
+ScriptClassType* ModuleCompiler::builtinInterface(const std::string& name) {
+    const std::string key = (name == "IDisposable" || name == "System.IDisposable")
+                                ? std::string("System.IDisposable")
+                                : std::string();
+    if (key.empty()) return nullptr;
+    auto existing = builtinInterfaces_.find(key);
+    if (existing != builtinInterfaces_.end()) return existing->second;
+
+    auto storage = std::make_unique<ScriptClassType>();
+    auto* type = storage.get();
+    type->name = key;
+    type->namespacePath = "System";
+    type->isInterface = true;
+    type->isAbstract = true;
+    type->module = module_.get();
+    module_->classesByName[key] = type;
+    module_->classes.push_back(std::move(storage));
+    builtinInterfaces_[key] = type;
+
+    // `void Dispose()`, so declarations, assignments and calls all work.
+    auto functionPtr = std::make_unique<ScriptFunction>();
+    auto* function = functionPtr.get();
+    function->name = "Dispose";
+    function->module = module_.get();
+    function->returnType = primVoid();
+    function->isAbstract = true;
+    function->interfaceSlot = interfaceSlotFor(*type, "Dispose()");
+    type->methods["Dispose"].push_back(function);
+    module_->functions.push_back(std::move(functionPtr));
+
+    if (type->interfaceVtable.size() < static_cast<std::size_t>(interfaceSlotCount_)) {
+        type->interfaceVtable.resize(static_cast<std::size_t>(interfaceSlotCount_), nullptr);
+    }
+    return type;
 }
 
 void ModuleCompiler::layoutField(ScriptClassType& cls, const FieldDeclaration& declaration) {
@@ -588,6 +739,18 @@ void ModuleCompiler::layoutField(ScriptClassType& cls, const FieldDeclaration& d
 }
 
 void ModuleCompiler::layoutMethod(ScriptClassType& cls, const FunctionDeclaration& declaration) {
+    if (cls.isInterface) {
+        auto* signature = createFunctionStub(declaration, &cls);
+        if (signature == nullptr) return;
+        if (declaration.body != nullptr) {
+            error("E0464", "interface members cannot have a body", declaration);
+        }
+        signature->vtableSlot = -1;
+        signature->isAbstract = true;
+        signature->interfaceSlot = interfaceSlotFor(cls, interfaceSignature(declaration));
+        cls.methods[signature->name].push_back(signature);
+        return;
+    }
     if (declaration.isFinalizer) {
         if (cls.isStruct) {
             error("E0451", "struct '" + cls.name + "' cannot declare a finalizer", declaration);
@@ -991,7 +1154,7 @@ std::vector<std::string> ModuleCompiler::candidateNames(const std::string& rawNa
 }
 
 bool ModuleCompiler::resolveTypeNameInScope(const std::string& rawName, const std::string& scope,
-                                            ScriptType& result) const {
+                                            ScriptType& result) {
     // Built-in primitives and host registered types are not namespaced.
     if (engine_.resolveTypeName(rawName, nullptr, result)) return true;
 
@@ -1009,6 +1172,11 @@ bool ModuleCompiler::resolveTypeNameInScope(const std::string& rawName, const st
         // `using System;` must also reach host types registered as `System.X`.
         if (auto* native = engine_.findNativeType(candidate)) {
             result = ScriptType(native->name, Primitive::None, native);
+            return true;
+        }
+        // Compiler-known contracts such as `IDisposable`.
+        if (auto* builtin = builtinInterface(candidate)) {
+            result = ScriptType(builtin->name, Primitive::None, builtin);
             return true;
         }
     }

@@ -50,14 +50,19 @@ int ScriptBuilder::addFunctionRef(ScriptFunction* function) {
 }
 
 int ScriptBuilder::addVirtualRef(ScriptFunction* function) {
+    const bool isInterface = function->interfaceSlot >= 0;
+    const int slot = isInterface ? function->interfaceSlot : function->vtableSlot;
     for (std::size_t i = 0; i < virtualRefs_.size(); ++i) {
-        if (virtualRefs_[i].slot == function->vtableSlot &&
+        if (virtualRefs_[i].slot == slot && virtualRefs_[i].isInterface == isInterface &&
             virtualRefs_[i].parameterCount == static_cast<int>(function->parameters.size())) {
             return static_cast<int>(i);
         }
     }
-    virtualRefs_.push_back(VirtualCallSite{function->vtableSlot,
-                                           static_cast<int>(function->parameters.size())});
+    VirtualCallSite site;
+    site.slot = slot;
+    site.parameterCount = static_cast<int>(function->parameters.size());
+    site.isInterface = isInterface;
+    virtualRefs_.push_back(site);
     return static_cast<int>(virtualRefs_.size() - 1);
 }
 

@@ -330,9 +330,14 @@ struct PropertyDeclaration : Declaration {
 
 struct ClassDeclaration : Declaration {
     std::optional<std::string> baseName;
+    /// Interfaces after the base class (`class A : B, IFoo, IBar`).
+    std::vector<std::string> interfaceNames;
     bool isAbstract = false;
     /// C# style value type: no inheritance, no virtual dispatch, copied by value.
     bool isStruct = false;
+    /// `interface IFoo { ... }`: same node shape as a class, but it only holds
+    /// abstract signatures and never gets fields or a constructor.
+    bool isInterface = false;
     /// Generic template parameters (`class Box<T>` -> ["T"]), empty otherwise.
     std::vector<TypeParameter> typeParameters;
     /// Source range of the declaration, used to re-instantiate the template.

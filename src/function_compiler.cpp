@@ -505,10 +505,38 @@ void FunctionCompiler::compileForeach(const ForeachStatement& statement) {
     pushScope();
     auto collectionType = compileExpression(*statement.collection);
     ScriptType elementType;
+
+    // C# enumerator pattern: GetEnumerator() -> MoveNext()/Current.
+    ScriptFunction* protocolGetEnumerator = nullptr;
+    ScriptFunction* protocolMoveNext = nullptr;
+    ScriptFunction* protocolCurrent = nullptr;
     if (collectionType.isArray()) {
         elementType = *collectionType.element;
     } else if (collectionType.isString()) {
         elementType = primChar();
+    } else if (auto* cls = dynamic_cast<ScriptClassType*>(collectionType.object)) {
+        auto getEnumerator = cls->findMethods("GetEnumerator", 0, false);
+        if (!getEnumerator.empty()) {
+            auto* enumerator = dynamic_cast<ScriptClassType*>(getEnumerator.front()->returnType.object);
+            if (enumerator != nullptr) {
+                auto moveNext = enumerator->findMethods("MoveNext", 0, false);
+                const auto* current = enumerator->findProperty("Current");
+                if (!moveNext.empty() && moveNext.front()->returnType.isBool() && current != nullptr &&
+                    current->getter != nullptr) {
+                    protocolGetEnumerator = getEnumerator.front();
+                    protocolMoveNext = moveNext.front();
+                    protocolCurrent = current->getter;
+                    elementType = current->type;
+                }
+            }
+        }
+        if (protocolGetEnumerator == nullptr) {
+            modules_.error("E0466",
+                           "'foreach' requires an array, a string or a type with GetEnumerator()/"
+                           "MoveNext()/Current, got '" + collectionType.name + "'",
+                           statement);
+            elementType = primI32();
+        }
     } else {
         modules_.error("E0308",
                        "'foreach' requires an array or string, got '" + collectionType.name + "'",
@@ -520,6 +548,39 @@ void FunctionCompiler::compileForeach(const ForeachStatement& statement) {
         ScriptType declared;
         if (modules_.resolveTypeRef(*statement.elementType, statement, namespaceScope(), declared))
             elementType = declared;
+    }
+
+    if (protocolGetEnumerator != nullptr) {
+        // `foreach (var x in c)` over a script class:
+        //   var e = c.GetEnumerator(); while (e.MoveNext()) { var x = e.Current; ... }
+        int elementSlot = allocateSlot(elementType);
+        declareLocal(statement.variableName, elementType, elementSlot, false, useCells_);
+        int enumeratorSlot = allocateSlot(protocolGetEnumerator->returnType);
+        emitScriptCall(protocolGetEnumerator);   // receiver (the collection) is on the stack
+        emit(OpCode::StoreLocal, enumeratorSlot, -1);
+
+        Label startLabel = builder_.newLabel();
+        Label continueLabel = builder_.newLabel();
+        Label endLabel = builder_.newLabel();
+        builder_.markLabel(startLabel);
+        emit(OpCode::LoadLocal, enumeratorSlot, +1);
+        emitScriptCall(protocolMoveNext);
+        emitJump(OpCode::Jz, endLabel, -1);
+        emit(OpCode::LoadLocal, enumeratorSlot, +1);
+        emitScriptCall(protocolCurrent);
+        if (elementType.isStruct()) emit(OpCode::CloneStruct, 0, 0);
+        if (useCells_) emit(OpCode::NewCell, 0, 0);
+        emit(OpCode::StoreLocal, elementSlot, -1);
+
+        loops_.push_back(LoopContext{endLabel, continueLabel, true, finallyDepth_});
+        compileStatement(*statement.body);
+        loops_.pop_back();
+
+        builder_.markLabel(continueLabel);
+        emitJump(OpCode::Jmp, startLabel, 0);
+        builder_.markLabel(endLabel);
+        popScope();
+        return;
     }
 
     int collectionSlot = allocateSlot(collectionType);
@@ -1777,6 +1838,11 @@ ScriptType FunctionCompiler::compileNewObject(const NewObjectExpression& express
         return type;
     }
     if (auto* cls = dynamic_cast<ScriptClassType*>(type.object)) {
+        if (cls->isInterface) {
+            modules_.error("E0465", "cannot create an instance of interface '" + cls->name + "'", expression);
+            emitDefault(primError());
+            return primError();
+        }
         if (cls->isAbstract) {
             modules_.error("E0346", "cannot instantiate abstract class '" + cls->name + "'", expression);
         }
@@ -2861,6 +2927,11 @@ void FunctionCompiler::compileCallArguments(const std::vector<ExprPtr>& argument
 }
 
 void FunctionCompiler::emitScriptCall(ScriptFunction* target) {
+    // Interface signatures are dispatched through the interface table.
+    if (target->interfaceSlot >= 0 && !target->isStatic) {
+        emitVirtualCall(target);
+        return;
+    }
     int reference = builder_.addFunctionRef(target);
     int pops = static_cast<int>(target->parameters.size()) + (target->isStatic ? 0 : 1);
     int pushes = target->returnType.isVoid() ? 0 : 1;

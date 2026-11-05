@@ -61,7 +61,7 @@ public:
     /// global namespace.
     std::vector<std::string> candidateNames(const std::string& rawName, const std::string& scope) const;
     bool resolveTypeNameInScope(const std::string& rawName, const std::string& scope,
-                                ScriptType& result) const;
+                                ScriptType& result);
     bool findGlobalInScope(const std::string& rawName, const std::string& scope, int& index) const;
     std::vector<ScriptFunction*> findFunctionsInScope(const std::string& rawName, const std::string& scope,
                                                       std::size_t arity) const;
@@ -94,6 +94,16 @@ private:
     void declareDelegates();
     void layoutClass(const ClassDeclaration& declaration);
     void layoutField(ScriptClassType& cls, const FieldDeclaration& declaration);
+    /// Binds an interface's signatures to concrete methods of `cls`.
+    void bindInterface(ScriptClassType& cls, ScriptClassType& interfaceClass,
+                       const ClassDeclaration& declaration);
+    void addInterface(ScriptClassType& cls, ScriptClassType* interfaceClass);
+    /// Module-wide slot for `InterfaceName.Method(...)`, so any call site can
+    /// dispatch through `ScriptClassType::interfaceVtable`.
+    int interfaceSlotFor(const ScriptClassType& interfaceClass, const std::string& signatureKey);
+    static std::string interfaceSignature(const FunctionDeclaration& declaration);
+    /// Compiler-known contracts (`IDisposable`) that need no declaration.
+    ScriptClassType* builtinInterface(const std::string& name);
     void layoutMethod(ScriptClassType& cls, const FunctionDeclaration& declaration);
     /// Rejects recursive value containment (`struct S { S inner; }`).
     void validateStructCycles();
@@ -151,6 +161,9 @@ private:
     std::unordered_map<std::string, ScriptDelegateType*> delegateInstances_;
     std::unordered_map<std::string, std::vector<GenericMethodTemplate>> genericMethods_;
     std::unordered_map<std::string, ScriptFunction*> genericMethodInstances_;
+    std::unordered_map<std::string, int> interfaceSlots_;
+    int interfaceSlotCount_ = 0;
+    std::unordered_map<std::string, ScriptClassType*> builtinInterfaces_;
     std::vector<std::unique_ptr<ClassDeclaration>> instantiatedDeclarations_;
     std::vector<std::unique_ptr<FunctionDeclaration>> instantiatedFunctions_;
     /// Keeps the source text of re-parsed generic templates alive.

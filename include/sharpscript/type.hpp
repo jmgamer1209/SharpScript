@@ -132,6 +132,12 @@ public:
     /// Value type (`struct`): no base, no vtable, copied by value at every
     /// assignment/argument/return boundary.
     bool isStruct = false;
+    /// `interface` type: only abstract signatures, never instantiated.
+    bool isInterface = false;
+    /// Interfaces this class implements, flattened transitively.
+    std::vector<ScriptClassType*> interfaces;
+    /// Dispatch table indexed by the module-wide interface slot of each method.
+    std::vector<ScriptFunction*> interfaceVtable;
     std::deque<FieldInfo> fields;
     std::unordered_map<std::string, int> fieldIndex;
     std::vector<ScriptFunction*> vtable;

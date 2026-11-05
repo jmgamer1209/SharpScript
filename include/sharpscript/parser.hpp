@@ -20,7 +20,9 @@ private:
     void parseUsing(CompilationUnit& unit);
     std::unique_ptr<Declaration> parseTopLevelDeclaration();
     std::unique_ptr<Declaration> parseDelegateDeclaration();
-    std::unique_ptr<ClassDeclaration> parseClass(bool isStruct);
+    std::unique_ptr<ClassDeclaration> parseClass(bool isStruct, bool isInterface = false);
+    /// True while parsing an `interface` body: members are signatures only.
+    bool inInterface_ = false;
     std::unique_ptr<Declaration> parseClassMember(const std::string& className, bool inStruct,
                                                   std::vector<std::unique_ptr<Declaration>>* extra = nullptr);
     /// Parses a property and appends the lowered field/accessors to `extra`.

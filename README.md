@@ -83,8 +83,6 @@ ctest --test-dir build -C Release -R csharp_compat
 
 | 项 | 现状 |
 | --- | --- |
-| 字符串方法命名 | 已对齐（`ToUpper` / `Substring` / `Split` / `TrimStart` …），camelCase 写法会报 `E0340` |
-| 接口 | 未实现（`IDisposable`/`IEnumerable` 等都没有），因此没有 `using` 语句 |
 | 其它 | `?.`、字符串插值、`out var`、`switch` 表达式、表达式体成员、特性、`List<T>`/`Dictionary<K,V>` |
 
 因此**当前样例与库**可以被 C# 编译；但只要用到上表第二组的写法就还不行。`csharp_compat` 会持续守住这条线。

@@ -309,12 +309,13 @@ std::unique_ptr<Declaration> Parser::parseTopLevelDeclaration() {
         return declaration;
     }
 
-    if (current().is("class") || current().is("struct")) {
+    if (current().is("class") || current().is("struct") || current().is("interface")) {
+        const bool isInterface = current().is("interface");
         const bool isStruct = current().is("struct");
         if (isStruct && isAbstract) report("a struct cannot be abstract", current());
-        auto cls = parseClass(isStruct);
+        auto cls = parseClass(isStruct, isInterface);
         cls->namespacePath = namespacePath;
-        cls->isAbstract = isAbstract && !isStruct;
+        cls->isAbstract = (isAbstract || isInterface) && !isStruct;
         return cls;
     }
 
@@ -388,14 +389,17 @@ std::unique_ptr<Declaration> Parser::parseTopLevelDeclaration() {
     return declaration;
 }
 
-std::unique_ptr<ClassDeclaration> Parser::parseClass(bool isStruct) {
-    Token classToken = expectWord(isStruct ? "struct" : "class");
-    std::string name = expectIdentifier(isStruct ? "struct name" : "class name");
+std::unique_ptr<ClassDeclaration> Parser::parseClass(bool isStruct, bool isInterface) {
+    Token classToken = expectWord(isInterface ? "interface" : (isStruct ? "struct" : "class"));
+    std::string name = expectIdentifier(isInterface ? "interface name"
+                                                   : (isStruct ? "struct name" : "class name"));
     std::vector<TypeParameter> typeParameters = parseTypeParameters();
     std::optional<std::string> baseName;
+    std::vector<std::string> interfaceNames;
     if (match(TokenType::Colon)) {
         baseName = parseDottedName();
         if (isStruct) report("a struct cannot have a base type", classToken);
+        while (match(TokenType::Comma)) interfaceNames.push_back(parseDottedName());
     }
     parseConstraints(typeParameters);
 
@@ -403,12 +407,16 @@ std::unique_ptr<ClassDeclaration> Parser::parseClass(bool isStruct) {
     auto declaration = std::make_unique<ClassDeclaration>();
     declaration->name = name;
     declaration->baseName = isStruct ? std::nullopt : baseName;
+    declaration->interfaceNames = std::move(interfaceNames);
     declaration->isStruct = isStruct;
+    declaration->isInterface = isInterface;
     declaration->typeParameters = std::move(typeParameters);
     declaration->sourceStart = classToken.offset;
     declaration->line = classToken.line;
     declaration->column = classToken.column;
 
+    const bool previousInterfaceState = inInterface_;
+    inInterface_ = isInterface;
     while (!atEnd() && current().type != TokenType::RBrace) {
         std::size_t start = position_;
         try {
@@ -422,6 +430,7 @@ std::unique_ptr<ClassDeclaration> Parser::parseClass(bool isStruct) {
         }
         if (position_ == start) advance();
     }
+    inInterface_ = previousInterfaceState;
     expect(TokenType::RBrace, "'}'");
     declaration->sourceEnd = current().offset;
     return declaration;
@@ -505,6 +514,32 @@ std::unique_ptr<Declaration> Parser::parsePropertyMember(
 
     if (!property->hasGetter && !property->hasSetter) {
         report("property '" + name + "' must declare a 'get' or 'set' accessor", nameToken);
+    }
+
+    // In an interface a property is just a pair of accessor signatures.
+    if (inInterface_) {
+        auto declareAccessor = [&](const std::string& accessorName, bool isGetter) {
+            auto accessor = std::make_unique<FunctionDeclaration>();
+            accessor->name = accessorName;
+            if (isGetter) {
+                accessor->returnType = type;
+            } else {
+                TypeRef voidType;
+                voidType.name = "void";
+                accessor->returnType = voidType;
+                ParameterDeclaration parameter;
+                parameter.name = "value";
+                parameter.type = type;
+                accessor->parameters.push_back(std::move(parameter));
+            }
+            accessor->isAbstract = true;
+            accessor->line = nameToken.line;
+            accessor->column = nameToken.column;
+            extra->push_back(std::move(accessor));
+        };
+        if (property->hasGetter) declareAccessor("get_" + name, true);
+        if (property->hasSetter) declareAccessor("set_" + name, false);
+        return property;
     }
 
     const bool needsBacking =
@@ -690,7 +725,7 @@ std::unique_ptr<Declaration> Parser::parseClassMember(const std::string& classNa
         method->name = name;
         method->returnType = type;
         method->isStatic = isStatic;
-        method->isAbstract = isAbstract;
+        method->isAbstract = isAbstract || inInterface_;
         method->isOverride = isOverride;
         method->line = nameToken.line;
         method->column = nameToken.column;
@@ -699,9 +734,10 @@ std::unique_ptr<Declaration> Parser::parseClassMember(const std::string& classNa
         method->parameters = parseParameters();
         parseConstraints(method->typeParameters);
         if (match(TokenType::Semicolon)) {
-            if (!isAbstract) report("method '" + name + "' must have a body", nameToken);
+            if (!isAbstract && !inInterface_) report("method '" + name + "' must have a body", nameToken);
             method->sourceEnd = current().offset;
         } else {
+            if (inInterface_) report("interface members cannot have a body", nameToken);
             method->body = parseBlock();
             method->sourceEnd = current().offset;
         }
@@ -711,6 +747,8 @@ std::unique_ptr<Declaration> Parser::parseClassMember(const std::string& classNa
     if (!typeParameters.empty()) {
         report("generic type arguments are only allowed on methods", nameToken);
     }
+
+    if (inInterface_) report("interfaces cannot declare fields ('" + name + "')", nameToken);
 
     auto field = std::make_unique<FieldDeclaration>();
     field->name = name;
@@ -1004,6 +1042,81 @@ StmtPtr Parser::parseStatement() {
         empty->line = token.line;
         empty->column = token.column;
         return empty;
+    }
+
+    // `using (T x = expr) { ... }` desugars to
+    //   { T x = expr; try { ... } finally { if (x != null) x.Dispose(); } }
+    if (token.is("using") && peek(1).type == TokenType::LParen) {
+        advance();
+        expect(TokenType::LParen, "'('");
+        TypeRef resourceType = parseType();
+        Token nameToken = current();
+        const std::string resourceName = expectIdentifier("resource name");
+        expect(TokenType::Assign, "'='");
+        auto initializer = parseExpression();
+        expect(TokenType::RParen, "')'");
+        auto body = parseStatement();
+
+        auto block = std::make_unique<BlockStatement>();
+        block->line = token.line;
+        block->column = token.column;
+
+        auto declaration = std::make_unique<LocalVariableDeclaration>();
+        declaration->line = nameToken.line;
+        declaration->column = nameToken.column;
+        declaration->type = resourceType;
+        VariableInitializer entry;
+        entry.name = resourceName;
+        entry.value = std::move(initializer);
+        entry.line = nameToken.line;
+        entry.column = nameToken.column;
+        declaration->initializers.push_back(std::move(entry));
+        block->statements.push_back(std::move(declaration));
+
+        auto makeIdentifier = [&](const std::string& identifierName) {
+            auto identifier = std::make_unique<IdentifierExpression>();
+            identifier->name = identifierName;
+            identifier->line = nameToken.line;
+            identifier->column = nameToken.column;
+            return identifier;
+        };
+
+        auto tryStatement = std::make_unique<TryStatement>();
+        tryStatement->line = token.line;
+        tryStatement->column = token.column;
+        if (auto* asBlock = dynamic_cast<BlockStatement*>(body.get())) {
+            body.release();
+            tryStatement->body = std::unique_ptr<BlockStatement>(asBlock);
+        } else {
+            auto single = std::make_unique<BlockStatement>();
+            single->statements.push_back(std::move(body));
+            tryStatement->body = std::move(single);
+        }
+
+        auto condition = std::make_unique<BinaryExpression>();
+        condition->op = "!=";
+        condition->left = makeIdentifier(resourceName);
+        auto nullLiteral = std::make_unique<LiteralExpression>();
+        nullLiteral->kind = LiteralKind::Null;
+        condition->right = std::move(nullLiteral);
+
+        auto disposeCall = std::make_unique<CallExpression>();
+        auto disposeTarget = std::make_unique<MemberExpression>();
+        disposeTarget->target = makeIdentifier(resourceName);
+        disposeTarget->memberName = "Dispose";
+        disposeCall->callee = std::move(disposeTarget);
+        auto disposeStatement = std::make_unique<ExpressionStatement>();
+        disposeStatement->expression = std::move(disposeCall);
+
+        auto disposeGuard = std::make_unique<IfStatement>();
+        disposeGuard->condition = std::move(condition);
+        disposeGuard->thenBranch = std::move(disposeStatement);
+
+        auto finallyBlock = std::make_unique<BlockStatement>();
+        finallyBlock->statements.push_back(std::move(disposeGuard));
+        tryStatement->finallyBody = std::move(finallyBlock);
+        block->statements.push_back(std::move(tryStatement));
+        return block;
     }
 
     if (token.is("if")) {

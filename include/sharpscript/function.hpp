@@ -15,6 +15,9 @@ struct ScriptParameter {
 struct VirtualCallSite {
     int slot = -1;
     int parameterCount = 0;
+    /// True when `slot` indexes `ScriptClassType::interfaceVtable` instead of
+    /// the class vtable.
+    bool isInterface = false;
 };
 
 enum class HandlerKind : std::uint8_t { Catch, Finally };
@@ -81,6 +84,8 @@ public:
     bool isAbstract = false;
     NativeFunction* native = nullptr;
     int vtableSlot = -1;
+    /// Module-wide interface slot when this function is an interface signature.
+    int interfaceSlot = -1;
 
     bool isNative() const { return native != nullptr; }
     bool hasBody() const { return native == nullptr && !isAbstract && !code.empty(); }

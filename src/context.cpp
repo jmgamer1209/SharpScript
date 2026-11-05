@@ -742,11 +742,14 @@ Value ExecutionContext::invokeFunction(ScriptFunction* function, std::vector<Val
                 Value receiver = pop();
                 auto instance = receiver.asInstance();
                 if (!instance) throwRuntime("virtual call on a null reference", function, pc - 1);
-                auto& vtable = instance->cls()->vtable;
+                auto& vtable = site.isInterface ? instance->cls()->interfaceVtable : instance->cls()->vtable;
                 if (site.slot < 0 || site.slot >= static_cast<int>(vtable.size())) {
                     throwRuntime("invalid virtual method slot", function, pc - 1);
                 }
                 auto* target = vtable[static_cast<std::size_t>(site.slot)];
+                if (target == nullptr) {
+                    throwRuntime("interface method is not implemented", function, pc - 1);
+                }
                 frames_[frameIndex].callSite = pc - 1;
                 Value result = invokeFunction(target, callArgs, receiver, depth + 1);
                 if (unwinding_) {

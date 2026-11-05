@@ -98,10 +98,38 @@ class Array<T>
         for (int i = 0; i < used; i = i + 1) action(items[i]);
     }
 
+    public ArrayEnumerator<T> GetEnumerator()
+    {
+        return new ArrayEnumerator<T>(this);
+    }
+
     public T[] ToArray()
     {
         T[] copy = new T[used];
         for (int i = 0; i < used; i = i + 1) copy[i] = items[i];
         return copy;
+    }
+}
+
+// `foreach (var x in list)` uses the C# enumerator pattern.
+class ArrayEnumerator<T>
+{
+    private Array<T> items;
+    private int index = -1;
+
+    public ArrayEnumerator(Array<T> items)
+    {
+        this.items = items;
+    }
+
+    public bool MoveNext()
+    {
+        index = index + 1;
+        return index < items.Count;
+    }
+
+    public T Current
+    {
+        get { return items.Get(index); }
     }
 }

@@ -231,6 +231,13 @@ bool ScriptClassType::isAssignableFrom(const ScriptObjectType* other) const {
     if (other == this) return true;
     auto* otherClass = dynamic_cast<const ScriptClassType*>(other);
     if (otherClass == nullptr) return false;
+    if (isInterface) {
+        // An interface accepts any class that implements it (transitively).
+        for (auto* implemented : otherClass->interfaces) {
+            if (implemented == this) return true;
+        }
+        return false;
+    }
     for (auto* current = otherClass; current != nullptr; current = current->base) {
         if (current == this) return true;
     }
