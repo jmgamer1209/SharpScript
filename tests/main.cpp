@@ -2176,6 +2176,107 @@ void main() {
     });
 }
 
+void testProperties() {
+    test("auto and explicit property accessors", [] {
+        expectOutput(R"(
+class Player {
+    private int hp = 100;
+    public int Health {
+        get { return hp; }
+        set { if (value < 0) hp = 0; else hp = value; }
+    }
+    public string Name { get; set; }
+    public int Level { get; }
+
+    public Player() {
+        Level = 1;
+        Name = "unnamed";
+    }
+
+    public void Damage(int amount) { Health = Health - amount; }
+}
+
+void main() {
+    Player p = new Player();
+    p.Name = "hero";
+    print(p.Name);
+    print(p.Level);
+    print(p.Health);
+    p.Damage(30);
+    print(p.Health);
+    p.Health = -5;
+    print(p.Health);
+    p.Health += 7;
+    print(p.Health);
+})",
+                     {"hero", "1", "100", "70", "0", "7"});
+    });
+
+    test("static, inherited and generic properties", [] {
+        expectOutput(R"(
+struct Point { public int x; public int y; }
+
+class Box<T> {
+    public T Value { get; set; }
+    public int Hits { get; private set; }
+}
+
+class Base {
+    public int Health { get; set; }
+    public static int Instances { get; set; }
+}
+
+class Derived : Base {
+    public int Extra { get; set; }
+}
+
+void main() {
+    Base.Instances = 3;
+    Base.Instances += 1;
+    print(Base.Instances);
+
+    Derived d = new Derived();
+    d.Health = 50;
+    d.Extra = 2;
+    print(d.Health + d.Extra);
+
+    Box<int> numbers = new Box<int>();
+    numbers.Value = 9;
+    print(numbers.Value);
+
+    Box<Point> points = new Box<Point>();
+    Point p = new Point();
+    p.x = 4;
+    p.y = 5;
+    points.Value = p;
+    print(points.Value.x + points.Value.y);
+})",
+                     {"4", "52", "9", "9"});
+    });
+
+    test("property restrictions are diagnosed", [] {
+        auto expectDiagnostic = [](const std::string& source, const std::string& code) {
+            TestEngine harness;
+            std::vector<Diagnostic> diagnostics;
+            auto module = harness.engine->tryLoadModule("bad", source, "bad.ss", diagnostics);
+            expectTrue(module == nullptr, "expected compilation failure for " + code);
+            bool found = false;
+            std::string all;
+            for (const auto& diagnostic : diagnostics) {
+                all += diagnostic.toString() + "\n";
+                if (diagnostic.code == code) found = true;
+            }
+            if (!found) throw std::runtime_error("expected diagnostic " + code + ", got:\n" + all);
+        };
+
+        expectDiagnostic("class C { public int X { get; } } void main() { C c = new C(); c.X = 1; }", "E0455");
+        expectDiagnostic("class C { public int X { set { } } } void main() { C c = new C(); print(c.X); }",
+                         "E0454");
+        expectDiagnostic("class C { public int X { get; set; } public int X { get; set; } } void main() { }",
+                         "E0456");
+    });
+}
+
 void testDiagnosticQuality() {
     auto collect = [](const std::string& source) {
         auto harness = std::make_unique<TestEngine>();
@@ -3503,6 +3604,7 @@ int main() {
     testFuncAction();
     testScriptStandardLibrary();
     testSections();
+    testProperties();
     testDiagnosticQuality();
     testFinalizers();
     testFinally();

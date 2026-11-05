@@ -919,6 +919,17 @@ ScriptType FunctionCompiler::compileIdentifier(const IdentifierExpression& ident
         }
     }
 
+    if (auto* property = findOwnerProperty(identifier.name)) {
+        if (property->getter == nullptr) {
+            modules_.error("E0454", "property '" + identifier.name + "' has no getter", identifier);
+            emitDefault(primError());
+            return primError();
+        }
+        if (!property->getter->isStatic) emit(OpCode::LoadThis, 0, +1);
+        emitScriptCall(property->getter);
+        return property->type;
+    }
+
     if (auto* field = findInstanceField(identifier.name)) {
         emit(OpCode::LoadThis, 0, +1);
         emitLoadField(field);
@@ -1172,6 +1183,15 @@ ScriptType FunctionCompiler::compileStaticMember(const MemberExpression& member,
             emit(OpCode::LoadGlobal, it->second, +1);
             return modules_.module().globals[it->second].type;
         }
+        if (auto* property = cls->findProperty(member.memberName)) {
+            if (property->getter != nullptr) {
+                emitScriptCall(property->getter);
+                return property->type;
+            }
+            modules_.error("E0454", "property '" + member.memberName + "' has no getter", member);
+            emitDefault(primError());
+            return primError();
+        }
         modules_.error("E0315", "'" + typeName + "' has no static field named '" + member.memberName + "'",
                        member);
         emitDefault(primI32());
@@ -1206,6 +1226,16 @@ ScriptType FunctionCompiler::emitMemberLoad(const MemberExpression& member, cons
         if (auto* field = cls->findField(member.memberName)) {
             emitLoadField(field);
             return field->type;
+        }
+        if (auto* property = cls->findProperty(member.memberName)) {
+            if (property->getter != nullptr) {
+                emitScriptCall(property->getter);
+                return property->type;
+            }
+            emit(OpCode::Pop, 0, -1);
+            modules_.error("E0454", "property '" + member.memberName + "' has no getter", member);
+            emitDefault(primError());
+            return primError();
         }
         modules_.error("E0318", "'" + cls->name + "' has no field named '" + member.memberName + "'", member);
         return primI32();
@@ -2207,6 +2237,14 @@ ScriptType FunctionCompiler::resolveLValueType(const Expression& target) {
             auto staticIt = module.globalsByName.find(owner->name + "." + identifier->name);
             if (staticIt != module.globalsByName.end()) return module.globals[staticIt->second].type;
         }
+        if (auto* property = findOwnerProperty(identifier->name)) {
+            const bool ctorInit = property->backingField != nullptr && function_->isConstructor;
+            if (property->setter == nullptr && !ctorInit) {
+                modules_.error("E0455", "property '" + identifier->name + "' is read-only (no setter)", target);
+                return primVoid();
+            }
+            return property->type;
+        }
         if (auto* field = findInstanceField(identifier->name)) return field->type;
         modules_.error("E0359", "unknown variable '" + identifier->name + "'", target);
         return primVoid();
@@ -2232,6 +2270,17 @@ ScriptType FunctionCompiler::resolveLValueType(const Expression& target) {
                             return property->type;
                         }
                     }
+                    if (auto* cls = dynamic_cast<ScriptClassType*>(ownerType.object)) {
+                        if (auto* property = cls->findProperty(member->memberName)) {
+                            if (property->setter == nullptr) {
+                                modules_.error("E0455", "property '" + member->memberName +
+                                                            "' is read-only (no setter)",
+                                               target);
+                                return primVoid();
+                            }
+                            return property->type;
+                        }
+                    }
                     modules_.error("E0360",
                                    "'" + chain + "' is not an assignable static member", target);
                     return primVoid();
@@ -2247,6 +2296,15 @@ ScriptType FunctionCompiler::resolveLValueType(const Expression& target) {
         if (auto* cls = dynamic_cast<ScriptClassType*>(targetType->object)) {
             auto* field = cls->findField(member->memberName);
             if (field == nullptr) {
+                if (auto* property = cls->findProperty(member->memberName)) {
+                    const bool ctorInit = property->backingField != nullptr && function_->isConstructor;
+                    if (property->setter == nullptr && !ctorInit) {
+                        modules_.error("E0455",
+                                       "property '" + member->memberName + "' is read-only (no setter)", target);
+                        return primVoid();
+                    }
+                    return property->type;
+                }
                 modules_.error("E0362", "'" + cls->name + "' has no field named '" + member->memberName + "'",
                                target);
                 return primVoid();
@@ -2297,6 +2355,12 @@ void FunctionCompiler::compileLValueAddress(const Expression& target) {
         if (lookupGlobal(identifier->name, index)) return;
         auto* owner = dynamic_cast<ScriptClassType*>(function_->owner);
         if (owner != nullptr && module.globalsByName.count(owner->name + "." + identifier->name) > 0) return;
+        if (auto* property = findOwnerProperty(identifier->name)) {
+            const bool needsReceiver =
+                !property->isStatic && (property->setter != nullptr || property->backingField != nullptr);
+            if (needsReceiver) emit(OpCode::LoadThis, 0, +1);
+            return;
+        }
         if (findInstanceField(identifier->name) != nullptr) emit(OpCode::LoadThis, 0, +1);
         return;
     }
@@ -2349,6 +2413,14 @@ void FunctionCompiler::emitLValueLoad(const Expression& target, const ScriptType
                 return;
             }
         }
+        if (auto* property = findOwnerProperty(identifier->name)) {
+            if (property->getter != nullptr) {
+                emitScriptCall(property->getter);   // receiver already pushed as the address
+                return;
+            }
+            emitDefault(type);
+            return;
+        }
         if (auto* field = findInstanceField(identifier->name)) {
             emit(OpCode::LoadThis, 0, +1);
             emit(OpCode::Dup, 0, +1);
@@ -2380,6 +2452,14 @@ void FunctionCompiler::emitLValueLoad(const Expression& target, const ScriptType
                             }
                         }
                     }
+                    if (auto* cls = dynamic_cast<ScriptClassType*>(ownerType.object)) {
+                        if (auto* property = cls->findProperty(member->memberName)) {
+                            if (property->getter != nullptr) {
+                                emitScriptCall(property->getter);
+                                return;
+                            }
+                        }
+                    }
                     emitDefault(type);
                     return;
                 }
@@ -2392,6 +2472,12 @@ void FunctionCompiler::emitLValueLoad(const Expression& target, const ScriptType
             if (auto* field = cls->findField(member->memberName)) {
                 emitLoadField(field);
                 return;
+            }
+            if (auto* property = cls->findProperty(member->memberName)) {
+                if (property->getter != nullptr) {
+                    emitScriptCall(property->getter);
+                    return;
+                }
             }
         }
         if (auto* native = dynamic_cast<NativeObjectType*>(addressType.object)) {
@@ -2460,6 +2546,18 @@ void FunctionCompiler::emitLValueStore(const Expression& target, const ScriptTyp
                 return;
             }
         }
+        if (auto* property = findOwnerProperty(identifier->name)) {
+            if (property->setter != nullptr) {
+                emitScriptCall(property->setter);   // receiver already pushed as the address
+                return;
+            }
+            if (property->backingField != nullptr) {
+                emitStoreField(property->backingField);
+                return;
+            }
+            emit(OpCode::Pop, 0, -1);
+            return;
+        }
         if (auto* field = findInstanceField(identifier->name)) {
             emitStoreField(field);
             return;
@@ -2491,6 +2589,14 @@ void FunctionCompiler::emitLValueStore(const Expression& target, const ScriptTyp
                             }
                         }
                     }
+                    if (auto* cls = dynamic_cast<ScriptClassType*>(ownerType.object)) {
+                        if (auto* property = cls->findProperty(member->memberName)) {
+                            if (property->setter != nullptr) {
+                                emitScriptCall(property->setter);
+                                return;
+                            }
+                        }
+                    }
                     emit(OpCode::Pop, 0, -1);
                     return;
                 }
@@ -2503,6 +2609,16 @@ void FunctionCompiler::emitLValueStore(const Expression& target, const ScriptTyp
                 if (auto* field = cls->findField(member->memberName)) {
                     emitStoreField(field);
                     return;
+                }
+                if (auto* property = cls->findProperty(member->memberName)) {
+                    if (property->setter != nullptr) {
+                        emitScriptCall(property->setter);
+                        return;
+                    }
+                    if (property->backingField != nullptr && function_->isConstructor) {
+                        emitStoreField(property->backingField);
+                        return;
+                    }
                 }
             }
             if (auto* native = dynamic_cast<NativeObjectType*>(targetType->object)) {
@@ -3086,6 +3202,12 @@ std::vector<ScriptFunction*> FunctionCompiler::staticMethods(ScriptClassType* cl
     return cls == nullptr ? std::vector<ScriptFunction*>{} : cls->findMethods(name, arity, true);
 }
 
+const ScriptClassType::PropertyInfo* FunctionCompiler::findOwnerProperty(const std::string& name) const {
+    if (function_->owner == nullptr) return nullptr;
+    auto* cls = dynamic_cast<ScriptClassType*>(function_->owner);
+    return cls != nullptr ? cls->findProperty(name) : nullptr;
+}
+
 FieldInfo* FunctionCompiler::findInstanceField(const std::string& name) const {
     if (function_->owner == nullptr || function_->isStatic) return nullptr;
     auto* cls = dynamic_cast<ScriptClassType*>(function_->owner);
@@ -3124,6 +3246,7 @@ std::optional<ScriptType> FunctionCompiler::inferType(const Expression& expressi
             auto staticIt = module.globalsByName.find(owner->name + "." + identifier->name);
             if (staticIt != module.globalsByName.end()) return module.globals[staticIt->second].type;
         }
+        if (auto* property = findOwnerProperty(identifier->name)) return property->type;
         if (auto* field = findInstanceField(identifier->name)) return field->type;
         return std::nullopt;
     }

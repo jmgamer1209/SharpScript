@@ -185,6 +185,8 @@ void substituteDeclarationTypes(Declaration& declaration, const TypeEnvMap& env)
         if (function->returnType) substituteTypeRef(*function->returnType, env);
         for (auto& parameter : function->parameters) substituteTypeRef(parameter.type, env);
         if (function->body) substituteBlock(*function->body, env);
+    } else if (auto* property = dynamic_cast<PropertyDeclaration*>(&declaration)) {
+        substituteTypeRef(property->type, env);
     } else if (auto* cls = dynamic_cast<ClassDeclaration*>(&declaration)) {
         for (auto& member : cls->members) substituteDeclarationTypes(*member, env);
     }
@@ -495,6 +497,35 @@ void ModuleCompiler::layoutClass(const ClassDeclaration& declaration) {
         } else if (auto* nested = dynamic_cast<ClassDeclaration*>(memberPtr.get())) {
             error("E0206", "nested classes are not supported ('" + nested->name + "')", *nested);
         }
+    }
+
+    // Properties are registered after their lowered accessors exist; looking them
+    // up by name keeps the lowering observable only in the parser.
+    for (auto& memberPtr : declaration.members) {
+        auto* property = dynamic_cast<PropertyDeclaration*>(memberPtr.get());
+        if (property == nullptr) continue;
+        if (cls.properties.count(property->name) > 0) {
+            error("E0456", "class '" + cls.name + "' already declares a property named '" + property->name + "'",
+                  *property);
+            continue;
+        }
+        ScriptClassType::PropertyInfo info;
+        if (property->hasGetter) {
+            auto it2 = cls.methods.find("get_" + property->name);
+            if (it2 != cls.methods.end() && !it2->second.empty()) info.getter = it2->second.front();
+        }
+        if (property->hasSetter) {
+            auto it2 = cls.methods.find("set_" + property->name);
+            if (it2 != cls.methods.end() && !it2->second.empty()) info.setter = it2->second.front();
+        }
+        ScriptType propertyType;
+        if (!resolveTypeRef(property->type, *property, cls.namespacePath, propertyType)) {
+            propertyType = primError();
+        }
+        info.type = propertyType;
+        info.isStatic = property->isStatic;
+        if (property->isAuto) info.backingField = cls.findField("__" + property->name);
+        cls.properties[property->name] = info;
     }
 
     layoutInProgress_.erase(&declaration);

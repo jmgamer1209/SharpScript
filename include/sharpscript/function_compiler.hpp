@@ -188,6 +188,8 @@ private:
     std::vector<ScriptFunction*> staticMethods(ScriptClassType* cls, const std::string& name,
                                                std::size_t arity) const;
     FieldInfo* findInstanceField(const std::string& name) const;
+    /// Property of the enclosing class, for bare `Name` inside its methods.
+    const ScriptClassType::PropertyInfo* findOwnerProperty(const std::string& name) const;
 
     std::optional<ScriptType> inferType(const Expression& expression);
     std::optional<ScriptType> inferCallType(const CallExpression& call);

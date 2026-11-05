@@ -140,6 +140,21 @@ public:
     /// `~Type()` declared by this class (nullptr when it has none).
     ScriptFunction* finalizer = nullptr;
 
+    struct PropertyInfo {
+        ScriptFunction* getter = nullptr;
+        ScriptFunction* setter = nullptr;
+        ScriptType type;
+        bool isStatic = false;
+        /// Backing field of an auto-property; lets constructors initialize
+        /// get-only auto-properties, as C# does.
+        FieldInfo* backingField = nullptr;
+    };
+    /// Properties lowered to `get_<Name>` / `set_<Name>` accessors.
+    std::unordered_map<std::string, PropertyInfo> properties;
+
+    /// Looks a property up in this class and its bases.
+    const PropertyInfo* findProperty(const std::string& propertyName) const;
+
     /// True when this class or any base class declares a finalizer.
     bool hasFinalizer() const;
     FieldInfo* findField(const std::string& fieldName);

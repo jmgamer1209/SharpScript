@@ -412,8 +412,11 @@ std::unique_ptr<ClassDeclaration> Parser::parseClass(bool isStruct) {
     while (!atEnd() && current().type != TokenType::RBrace) {
         std::size_t start = position_;
         try {
-            auto member = parseClassMember(name, isStruct);
+            std::vector<std::unique_ptr<Declaration>> extra;
+            auto member = parseClassMember(name, isStruct, &extra);
             if (member != nullptr) declaration->members.push_back(std::move(member));
+            // Properties arrive together with their backing field and accessors.
+            for (auto& lowered : extra) declaration->members.push_back(std::move(lowered));
         } catch (const ParseAbort&) {
             synchronizeInBlock();
         }
@@ -441,7 +444,169 @@ std::unique_ptr<Declaration> Parser::parseDelegateDeclaration() {
     return declaration;
 }
 
-std::unique_ptr<Declaration> Parser::parseClassMember(const std::string& className, bool inStruct) {
+/// `Type Name { get; set; }` and the explicit forms.
+///
+/// Lowered to ordinary members so nothing downstream needs to know about
+/// properties: `get_Name` / `set_Name` accessors plus, for auto-properties, a
+/// `__Name` backing field. Doing the lowering here means a re-parsed generic
+/// class template produces the same members again.
+std::unique_ptr<Declaration> Parser::parsePropertyMember(
+    const TypeRef& type, const std::string& name, bool isStatic, bool inStruct, const Token& nameToken,
+    std::vector<std::unique_ptr<Declaration>>* extra) {
+    (void)inStruct;
+    if (extra == nullptr) {
+        report("property '" + name + "' is not allowed here", nameToken);
+        throw ParseAbort{};
+    }
+
+    auto property = std::make_unique<PropertyDeclaration>();
+    property->name = name;
+    property->type = type;
+    property->isStatic = isStatic;
+    property->line = nameToken.line;
+    property->column = nameToken.column;
+    property->namespacePath = currentNamespace();
+
+    expect(TokenType::LBrace, "'{'");
+    std::unique_ptr<BlockStatement> getterBody;
+    std::unique_ptr<BlockStatement> setterBody;
+    bool autoGetter = false;
+    bool autoSetter = false;
+    while (!atEnd() && current().type != TokenType::RBrace) {
+        // Accessor access modifiers (`private set`) are accepted and ignored.
+        while (current().type == TokenType::Identifier &&
+               (current().text == "public" || current().text == "private" || current().text == "protected")) {
+            advance();
+        }
+        if (matchWord("get")) {
+            if (property->hasGetter) report("property '" + name + "' declares 'get' twice", nameToken);
+            property->hasGetter = true;
+            if (match(TokenType::Semicolon)) {
+                autoGetter = true;
+            } else {
+                getterBody = parseBlock();
+            }
+            continue;
+        }
+        if (matchWord("set")) {
+            if (property->hasSetter) report("property '" + name + "' declares 'set' twice", nameToken);
+            property->hasSetter = true;
+            if (match(TokenType::Semicolon)) {
+                autoSetter = true;
+            } else {
+                setterBody = parseBlock();
+            }
+            continue;
+        }
+        report("expected a 'get' or 'set' accessor but found '" + current().text + "'", current());
+        throw ParseAbort{};
+    }
+    expect(TokenType::RBrace, "'}'");
+
+    if (!property->hasGetter && !property->hasSetter) {
+        report("property '" + name + "' must declare a 'get' or 'set' accessor", nameToken);
+    }
+
+    const bool needsBacking =
+        (property->hasGetter && autoGetter) || (property->hasSetter && autoSetter);
+    property->isAuto = needsBacking;
+    if (needsBacking && ((property->hasGetter && !autoGetter) || (property->hasSetter && !autoSetter))) {
+        report("an auto-property must use ';' for every accessor", nameToken);
+    }
+
+    const std::string backing = "__" + name;
+    auto makeIdentifier = [&](const std::string& identifierName) {
+        auto identifier = std::make_unique<IdentifierExpression>();
+        identifier->name = identifierName;
+        identifier->line = nameToken.line;
+        identifier->column = nameToken.column;
+        return identifier;
+    };
+
+    if (needsBacking) {
+        auto field = std::make_unique<FieldDeclaration>();
+        field->name = backing;
+        field->type = type;
+        field->isStatic = isStatic;
+        field->line = nameToken.line;
+        field->column = nameToken.column;
+        // `layoutField` creates one field per initializer entry, so the backing
+        // field needs a name even though it has no initial value.
+        VariableInitializer backingInitializer;
+        backingInitializer.name = backing;
+        backingInitializer.line = nameToken.line;
+        backingInitializer.column = nameToken.column;
+        field->initializers.push_back(std::move(backingInitializer));
+        extra->push_back(std::move(field));
+    }
+
+    if (property->hasGetter) {
+        auto getter = std::make_unique<FunctionDeclaration>();
+        getter->name = "get_" + name;
+        getter->returnType = type;
+        getter->isStatic = isStatic;
+        getter->line = nameToken.line;
+        getter->column = nameToken.column;
+        getter->sourceStart = -1;
+        getter->sourceEnd = -1;
+        if (getterBody != nullptr) {
+            getter->body = std::move(getterBody);
+        } else {
+            auto block = std::make_unique<BlockStatement>();
+            block->line = nameToken.line;
+            block->column = nameToken.column;
+            auto statement = std::make_unique<ReturnStatement>();
+            statement->line = nameToken.line;
+            statement->column = nameToken.column;
+            statement->value = makeIdentifier(backing);
+            block->statements.push_back(std::move(statement));
+            getter->body = std::move(block);
+        }
+        extra->push_back(std::move(getter));
+    }
+
+    if (property->hasSetter) {
+        auto setter = std::make_unique<FunctionDeclaration>();
+        setter->name = "set_" + name;
+        TypeRef voidType;
+        voidType.name = "void";
+        setter->returnType = voidType;
+        setter->isStatic = isStatic;
+        setter->line = nameToken.line;
+        setter->column = nameToken.column;
+        setter->sourceStart = -1;
+        setter->sourceEnd = -1;
+        ParameterDeclaration parameter;
+        parameter.name = "value";
+        parameter.type = type;
+        setter->parameters.push_back(std::move(parameter));
+        if (setterBody != nullptr) {
+            setter->body = std::move(setterBody);
+        } else {
+            auto block = std::make_unique<BlockStatement>();
+            block->line = nameToken.line;
+            block->column = nameToken.column;
+            auto statement = std::make_unique<ExpressionStatement>();
+            statement->line = nameToken.line;
+            statement->column = nameToken.column;
+            auto assignment = std::make_unique<AssignmentExpression>();
+            assignment->op = "=";
+            assignment->line = nameToken.line;
+            assignment->column = nameToken.column;
+            assignment->target = makeIdentifier(backing);
+            assignment->value = makeIdentifier("value");
+            statement->expression = std::move(assignment);
+            block->statements.push_back(std::move(statement));
+            setter->body = std::move(block);
+        }
+        extra->push_back(std::move(setter));
+    }
+
+    return property;
+}
+
+std::unique_ptr<Declaration> Parser::parseClassMember(const std::string& className, bool inStruct,
+                                                      std::vector<std::unique_ptr<Declaration>>* extra) {
     // `~Type() { ... }`: the finalizer, mirroring C#'s destructor syntax.
     if (current().type == TokenType::Tilde) {
         const Token tilde = advance();
@@ -513,6 +678,11 @@ std::unique_ptr<Declaration> Parser::parseClassMember(const std::string& classNa
     TypeRef type = parseType();
     Token nameToken = current();
     std::string name = expectIdentifier("member name");
+
+    if (current().type == TokenType::LBrace) {
+        return parsePropertyMember(type, name, isStatic, inStruct, nameToken, extra);
+    }
+
     std::vector<TypeParameter> typeParameters = parseTypeParameters();
 
     if (current().type == TokenType::LParen) {

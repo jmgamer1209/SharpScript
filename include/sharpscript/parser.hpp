@@ -21,7 +21,12 @@ private:
     std::unique_ptr<Declaration> parseTopLevelDeclaration();
     std::unique_ptr<Declaration> parseDelegateDeclaration();
     std::unique_ptr<ClassDeclaration> parseClass(bool isStruct);
-    std::unique_ptr<Declaration> parseClassMember(const std::string& className, bool inStruct);
+    std::unique_ptr<Declaration> parseClassMember(const std::string& className, bool inStruct,
+                                                  std::vector<std::unique_ptr<Declaration>>* extra = nullptr);
+    /// Parses a property and appends the lowered field/accessors to `extra`.
+    std::unique_ptr<Declaration> parsePropertyMember(const TypeRef& type, const std::string& name,
+                                                     bool isStatic, bool inStruct, const Token& nameToken,
+                                                     std::vector<std::unique_ptr<Declaration>>* extra);
     std::vector<ParameterDeclaration> parseParameters();
     TypeRef parseType();
     /// `<T, in U, out V>`; returns an empty vector when no `<` is present.

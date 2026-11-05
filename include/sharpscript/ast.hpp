@@ -312,6 +312,22 @@ struct FieldDeclaration : Declaration {
     std::vector<VariableInitializer> initializers;
 };
 
+/// `public int Health { get; set; }` / `{ get { ... } set { ... } }`.
+///
+/// The parser lowers every property to ordinary members: the accessor methods
+/// `get_<Name>` / `set_<Name>` (and, for auto-properties, a backing field
+/// `__<Name>`), so dispatch, virtual slots, generics and hot reload all reuse
+/// the existing method machinery. This node only records which functions back
+/// the property and is read again when the class is laid out.
+struct PropertyDeclaration : Declaration {
+    TypeRef type;
+    bool isStatic = false;
+    bool hasGetter = false;
+    bool hasSetter = false;
+    /// True when at least one accessor was declared with `;`.
+    bool isAuto = false;
+};
+
 struct ClassDeclaration : Declaration {
     std::optional<std::string> baseName;
     bool isAbstract = false;

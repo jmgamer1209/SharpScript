@@ -302,6 +302,41 @@ void main()
 - 限制：不支持异常过滤器 `when (...)`、以及 `class MyException : Exception`
   这类自定义异常类（脚本类不能继承原生类型）。
 
+### 属性（`get` / `set`）
+
+```csharp
+class Player {
+    private int hp = 100;
+
+    public int Health {                       // 显式访问器
+        get { return hp; }
+        set { if (value < 0) hp = 0; else hp = value; }
+    }
+    public string Name { get; set; }          // 自动属性
+    public int Level { get; }                 // 只读自动属性（可在构造函数里赋值）
+    public static int Instances { get; set; } // 静态属性
+
+    public Player() { Level = 1; Name = "unnamed"; }
+}
+
+void main() {
+    Player p = new Player();
+    p.Name = "hero";
+    p.Health -= 30;          // 复合赋值：先 get 再 set
+    print(p.Name + " " + p.Health + " " + p.Level);
+    Player.Instances += 1;
+}
+```
+
+- `set` 里的 `value` 是隐式参数名；`get`/`set` 都可省略其中一个（只写 `set` 即只写属性）。
+- **实现方式**：属性在解析阶段被**降级为普通成员**——访问器编译成方法 `get_<Name>` / `set_<Name>`，自动属性额外生成后备字段 `__<Name>`。
+  因此属性天然获得方法派发、继承、泛型单态化、热重载（方法体补丁）等已有能力，VM 与字节码层没有任何属性指令。
+- 类内部可以直接写属性名（`Health = Health - 30;`），等价于 `this.Health`；静态属性用 `Cls.Name` 访问。
+- 只读自动属性（`{ get; }`）允许在**构造函数**里赋值（写入后备字段），与 C# 一致；在其它地方赋值报 `E0455`。
+- 诊断：只写属性被读取 `E0454`、只读属性被赋值 `E0455`、同名属性重复声明 `E0456`。
+- 限制：不支持表达式体访问器（`=>`）、自动属性初始化器（`{ get; set; } = 5;`）、`init`、接口属性；
+  访问器上的修饰符（如 `private set`）会被解析但**不做访问控制**——本语言目前对字段/方法也不强制执行 `private`。
+
 ### 泛型类 / 泛型 struct
 
 ```csharp
@@ -937,11 +972,12 @@ build\Release\sharpscript_tests.exe
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-当前：**138 passed, 0 failed**。
+当前：**141 passed, 0 failed**。
 
 覆盖：算术/位运算/浮点、类型转换、字符串（UTF-16 长度/索引、PascalCase 方法、`null` 语义）、控制流、递归、全局初始化、
 类/继承/虚派发/静态成员、数组、命名空间（嵌套、using、静态成员、同名类型、file-scoped、热重载配对）、
 多文件 section（共享命名空间、诊断定位、行偏移、重载与函数体热更）、
+属性（自动/显式访问器、只读与构造函数初始化、静态与继承、泛型类、复合赋值、限制诊断）、
 `struct` 值类型（拷贝语义、嵌套、数组/引用字段、静态成员、限制诊断、GC、宿主边界、热重载）、
 委托与 lambda（方法组、多播、Invoke、null、类型检查、lambda 推断、闭包按引用捕获、循环变量捕获、GC 环）、
 ref/out/in（引用传递、字段/数组元素/struct、out var、in 只读、引用转发、限制诊断）、
@@ -980,7 +1016,7 @@ finally（所有出口、return 值保存、break/continue、嵌套顺序、异�
   暂不支持泛型 `Func<>`/`Action<>`、`event`、`async/await`、表达式树、`ref/out` 捕获、协变/逆变、匿名方法。
 - **ref/out/in**：脚本函数/方法/构造函数之间已支持按引用传递；不支持 `ref` 返回、`ref` 局部变量、
   `ref struct`，委托/lambda/原生函数参数也不能带修饰符。
-- 暂不支持：脚本类属性访问器、运算符重载、多维数组、跨模块继承、字节码持久化。
+- 暂不支持：运算符重载、多维数组、跨模块继承、字节码持久化。
 - 未做 JIT；当前是纯解释执行。性能目标是“足够快 + 结构清晰”，不是生产级峰值性能。
 
 ---
@@ -990,7 +1026,7 @@ finally（所有出口、return 值保存、break/continue、嵌套顺序、异�
 1. 字节码序列化/反序列化（对应 AngelScript 的 `SaveByteCode`）。
 2. 异常增强：异常过滤器 `when (...)`、脚本自定义异常类、异常序列化。
 3. `IDisposable` 风格的确定性释放（`using` 语句），与终结器互补。
-4. 脚本类属性访问器与运算符重载。
+4. 运算符重载。
 5. 编译期常量折叠、局部变量槽复用、superinstruction 优化。
 6. 多模块类型系统（跨模块继承、全局类型注册表）。
 7. 调试器协议：断点、单步、局部变量检视（`lineMap` 与帧信息已具备基础）。

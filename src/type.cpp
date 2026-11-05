@@ -165,6 +165,14 @@ bool ScriptType::canExplicitNumeric(Primitive from, Primitive to) {
     return !excluded(from) && !excluded(to);
 }
 
+const ScriptClassType::PropertyInfo* ScriptClassType::findProperty(const std::string& propertyName) const {
+    for (const ScriptClassType* current = this; current != nullptr; current = current->base) {
+        auto it = current->properties.find(propertyName);
+        if (it != current->properties.end()) return &it->second;
+    }
+    return nullptr;
+}
+
 bool ScriptClassType::hasFinalizer() const {
     for (const ScriptClassType* current = this; current != nullptr; current = current->base) {
         if (current->finalizer != nullptr) return true;
