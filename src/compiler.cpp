@@ -864,16 +864,30 @@ void ModuleCompiler::declareTopLevelGlobals() {
 }
 
 void ModuleCompiler::resolveEntryPoint() {
-    auto it = module_->functionsByName.find("main");
-    if (it == module_->functionsByName.end()) return;
-    for (auto* function : it->second) {
-        if (!function->parameters.empty()) continue;
-        if (!function->returnType.isVoid() && !function->returnType.sameAs(primI32())) {
-            error("E0212", "the entry point 'main' must return void or int", Node{});  // line 1
-            return;
-        }
+    auto accept = [this](ScriptFunction* function) {
+        if (!function->parameters.empty()) return false;
+        if (!function->returnType.isVoid() && !function->returnType.sameAs(primI32())) return false;
         module_->entryPoint = function;
-        return;
+        return true;
+    };
+
+    // `main` / `Main` at global scope first, then C# style `static Main()` inside
+    // any class (so a sample file can be compiled by both engines unchanged).
+    for (const std::string& name : {std::string("main"), std::string("Main")}) {
+        auto it = module_->functionsByName.find(name);
+        if (it == module_->functionsByName.end()) continue;
+        for (auto* function : it->second) {
+            if (accept(function)) return;
+        }
+    }
+    for (auto& cls : module_->classes) {
+        if (cls->isStruct) continue;
+        auto it = cls->methods.find("Main");
+        if (it == cls->methods.end()) continue;
+        for (auto* function : it->second) {
+            if (!function->isStatic) continue;
+            if (accept(function)) return;
+        }
     }
 }
 
@@ -990,6 +1004,11 @@ bool ModuleCompiler::resolveTypeNameInScope(const std::string& rawName, const st
         auto delegateIt = module_->delegatesByName.find(candidate);
         if (delegateIt != module_->delegatesByName.end()) {
             result = ScriptType(candidate, Primitive::None, delegateIt->second);
+            return true;
+        }
+        // `using System;` must also reach host types registered as `System.X`.
+        if (auto* native = engine_.findNativeType(candidate)) {
+            result = ScriptType(native->name, Primitive::None, native);
             return true;
         }
     }

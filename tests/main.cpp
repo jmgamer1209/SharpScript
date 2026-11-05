@@ -41,7 +41,7 @@ struct TestEngine {
     }
 
     std::shared_ptr<ScriptModule> load(const std::string& source, const std::string& moduleName = "test") {
-        return engine->loadModule(moduleName, source, moduleName + ".ss");
+        return engine->loadModule(moduleName, source, moduleName + ".cs");
     }
 
     void run(const std::string& source, const std::string& moduleName = "test") {
@@ -225,7 +225,7 @@ void main() {
     print(3 != 3);
     print(1 + 1 == 2 && 2 < 3);
     print(false || true);
-    print("".isEmpty());
+    print(string.IsNullOrEmpty(""));
 })",
                      {"true", "true", "false", "true", "true", "false", "true", "true", "true"});
     });
@@ -273,17 +273,17 @@ void testStrings() {
         expectOutput(R"(
 void main() {
     string s = "Hello";
-    print(s.length);
-    print(s.toUpper());
-    print(s.substring(1, 3));
-    print(s.indexOf("l"));
-    print(s.contains("ell"));
+    print(s.Length);
+    print(s.ToUpper());
+    print(s.Substring(1, 3));
+    print(s.IndexOf("l"));
+    print(s.Contains("ell"));
     print(s + " world");
     print("x" + 1 + 2);
     print(1 + 2 + "x");
     print("a" + true);
-    string[] parts = "a,b,c".split(",");
-    print(parts.length);
+    string[] parts = "a,b,c".Split(",");
+    print(parts.Length);
     print(parts[1]);
 })",
                      {"5", "HELLO", "ell", "2", "true", "Hello world", "x12", "3x", "aTrue", "3", "b"});
@@ -324,6 +324,19 @@ void main() {
                      {"5", "你好", "2", "你", "4", "3", "你好", "20320", "你"});
     });
 
+    test("string methods reject camelCase spellings", [] {
+        auto harness = std::make_unique<TestEngine>();
+        std::vector<Diagnostic> diagnostics;
+        auto module = harness->engine->tryLoadModule(
+            "bad", "void main() { string s = \"abc\"; print(s.toUpper()); }", "bad.cs", diagnostics);
+        expectTrue(module == nullptr, "camelCase must not resolve");
+        bool found = false;
+        for (const auto& diagnostic : diagnostics) {
+            if (diagnostic.code == "E0340") found = true;
+        }
+        expectTrue(found, "expected E0340 for 'toUpper'");
+    });
+
     test("C# PascalCase string methods", [] {
         expectOutput(R"(
 void main() {
@@ -336,7 +349,7 @@ void main() {
     print("a,b,c".Split(",").Length);
     print("abcabc".Replace("a", "X"));
     print(s.Trim().LastIndexOf("o"));
-    print("".IsEmpty());
+    print(string.IsNullOrEmpty(""));
     print("x".ToString());
 })",
                      {"Hello World", "HELLO WORLD", "true", "true", "true", "3", "XbcXbc", "7", "true",
@@ -381,7 +394,7 @@ void main() { string s = "abc"; print(s.Substring(5)); }
     test("non-BMP char literal is rejected", [] {
         TestEngine harness;
         std::vector<Diagnostic> diagnostics;
-        auto module = harness.engine->tryLoadModule("bad", "void main() { char c = '😀'; }", "bad.ss",
+        auto module = harness.engine->tryLoadModule("bad", "void main() { char c = '😀'; }", "bad.cs",
                                                     diagnostics);
         expectTrue(module == nullptr, "expected compilation failure");
         bool found = false;
@@ -602,15 +615,17 @@ void main() {
     a[0] = 10;
     a[1] = 20;
     a[2] = 30;
-    print(a.length);
+    print(a.Length);
     print(a[1]);
-    a.push(40);
-    print(a.length);
-    print(a.pop());
-    print(a.length);
     print(a[2]);
+
+    Array<int> growable = new Array<int>();
+    growable.Add(40);
+    growable.Add(50);
+    print(growable.Count);
+    print(growable.Get(1));
 })",
-                     {"3", "20", "4", "40", "3", "30"});
+                     {"3", "20", "30", "2", "50"});
     });
 
     test("array literals and foreach", [] {
@@ -866,7 +881,7 @@ void main() { A.counter = 5; }
 )");
         auto result = harness.engine->reloadModule(
             "test", "namespace A { int counter = 2; int other = 2; } void main() {}",
-            "test.ss");
+            "test.cs");
         expectTrue(result.success, "reload should succeed");
 
         bool migratedCounter = false;
@@ -959,8 +974,9 @@ void main() {
     print(a.value);
     print(list[0].value);
 
-    list.push(new S(2));
-    S popped = list.pop();
+    Array<S> mutating = new Array<S>();
+    mutating.Add(list[0]);
+    S popped = mutating.Get(0);
     popped.value = 77;
     print(popped.value);
 
@@ -1093,7 +1109,7 @@ void main() {
         auto expectDiagnostic = [](const std::string& source, const std::string& code) {
             TestEngine harness;
             std::vector<Diagnostic> diagnostics;
-            auto module = harness.engine->tryLoadModule("bad", source, "bad.ss", diagnostics);
+            auto module = harness.engine->tryLoadModule("bad", source, "bad.cs", diagnostics);
             expectTrue(module == nullptr, "expected compilation failure for " + code);
             bool found = false;
             std::string all;
@@ -1146,7 +1162,7 @@ void main() { value.a = 5; }
             "struct S { public int a; public int b; public int c; }\n"
             "S value;\n"
             "void main() {}\n",
-            "test.ss");
+            "test.cs");
         expectTrue(result.success, "reload should succeed");
 
         auto module = harness.engine->getModule("test");
@@ -1299,7 +1315,7 @@ void main() {
         auto expectDiagnostic = [](const std::string& source, const std::string& code) {
             TestEngine harness;
             std::vector<Diagnostic> diagnostics;
-            auto module = harness.engine->tryLoadModule("bad", source, "bad.ss", diagnostics);
+            auto module = harness.engine->tryLoadModule("bad", source, "bad.cs", diagnostics);
             expectTrue(module == nullptr, "expected compilation failure for " + code);
             bool found = false;
             std::string all;
@@ -1404,7 +1420,7 @@ void main() {
         auto expectDiagnostic = [](const std::string& source, const std::string& code) {
             TestEngine harness;
             std::vector<Diagnostic> diagnostics;
-            auto module = harness.engine->tryLoadModule("bad", source, "bad.ss", diagnostics);
+            auto module = harness.engine->tryLoadModule("bad", source, "bad.cs", diagnostics);
             expectTrue(module == nullptr, "expected compilation failure for " + code);
             bool found = false;
             std::string all;
@@ -1481,7 +1497,7 @@ int Depth<T>(T value, int count) {
 
 T Sum<T>(T[] items) where T : struct {
     T total = items[0];
-    for (int i = 1; i < items.length; i = i + 1) total = total + items[i];
+    for (int i = 1; i < items.Length; i = i + 1) total = total + items[i];
     return total;
 }
 
@@ -1607,7 +1623,7 @@ void main() {
         auto expectDiagnostic = [](const std::string& source, const std::string& code) {
             TestEngine harness;
             std::vector<Diagnostic> diagnostics;
-            auto module = harness.engine->tryLoadModule("bad", source, "bad.ss", diagnostics);
+            auto module = harness.engine->tryLoadModule("bad", source, "bad.cs", diagnostics);
             expectTrue(module == nullptr, "expected compilation failure for " + code);
             bool found = false;
             std::string all;
@@ -1877,7 +1893,7 @@ void main() {
         auto expectDiagnostic = [](const std::string& source, const std::string& code) {
             TestEngine harness;
             std::vector<Diagnostic> diagnostics;
-            auto module = harness.engine->tryLoadModule("bad", source, "bad.ss", diagnostics);
+            auto module = harness.engine->tryLoadModule("bad", source, "bad.cs", diagnostics);
             expectTrue(module == nullptr, "expected compilation failure for " + code);
             bool found = false;
             std::string all;
@@ -1949,7 +1965,7 @@ void main() {
     points[0] = c;
     points[1] = a;
     int found = -1;
-    for (int i = 0; i < points.length; i = i + 1) {
+    for (int i = 0; i < points.Length; i = i + 1) {
         if (points[i] == b) found = i;
     }
     print(found);
@@ -1975,7 +1991,7 @@ void main() {
     numbers.Add(3);
     numbers.Add(5);
     numbers.Add(7);
-    print(numbers.Count());
+    print(numbers.Count);
     print(numbers.IndexOf(7));
     print(numbers.Contains(4));
 
@@ -1992,7 +2008,7 @@ void main() {
     names.Add("b");
     print(names.Contains("b"));
     string[] raw = names.ToArray();
-    print(raw.length);
+    print(raw.Length);
 
     Array<Player> players = new Array<Player>();
     players.Add(new Player("p1"));
@@ -2014,7 +2030,7 @@ void main() {
     print(grid.Get(0).Get(0));
 
     numbers.Clear();
-    print(numbers.Count());
+    print(numbers.Count);
 })",
                      {"3", "2", "false", "4", "4", "n:9", "n:5", "n:7", "true", "2", "p1", "1",
                       "false", "1", "8", "0"});
@@ -2024,7 +2040,7 @@ void main() {
         auto expectDiagnostic = [](const std::string& source, const std::string& code) {
             TestEngine harness;
             std::vector<Diagnostic> diagnostics;
-            auto module = harness.engine->tryLoadModule("bad", source, "bad.ss", diagnostics);
+            auto module = harness.engine->tryLoadModule("bad", source, "bad.cs", diagnostics);
             expectTrue(module == nullptr, "expected compilation failure for " + code);
             bool found = false;
             std::string all;
@@ -2038,14 +2054,14 @@ void main() {
         expectDiagnostic("void main() { int[] a = new int[2]; a.insert(0, 1); }", "E0446");
         expectDiagnostic("void main() { int[] a = new int[2]; a.removeAt(0); }", "E0446");
         expectDiagnostic("void main() { int[] a = new int[2]; a.clear(); }", "E0446");
-        expectDiagnostic("void main() { int[] a = new int[2]; a.indexOf(1); }", "E0446");
-        expectDiagnostic("void main() { int[] a = new int[2]; a.contains(1); }", "E0446");
+        expectDiagnostic("void main() { int[] a = new int[2]; a.IndexOf(1); }", "E0446");
+        expectDiagnostic("void main() { int[] a = new int[2]; a.Contains(1); }", "E0446");
 
         TestEngine harness;
         harness.engine->settings.useScriptStandardLibrary = false;
         std::vector<Diagnostic> diagnostics;
         auto module = harness.engine->tryLoadModule("noLib", "void main() { Array<int> a = new Array<int>(); }",
-                                                   "noLib.ss", diagnostics);
+                                                   "noLib.cs", diagnostics);
         expectTrue(module == nullptr, "Array<T> is unknown without the library");
         bool found = false;
         for (const auto& diagnostic : diagnostics) {
@@ -2060,7 +2076,7 @@ void testSections() {
         TestEngine harness;
         auto module = harness.engine->loadModule(
             "multi",
-            {ScriptSection("player.ss", R"(
+            {ScriptSection("player.cs", R"(
 namespace Game {
     class Player {
         public string name;
@@ -2070,7 +2086,7 @@ namespace Game {
     int Created = 0;
 }
 )"),
-             ScriptSection("util.ss", R"(
+             ScriptSection("util.cs", R"(
 namespace Game {
     int Touch() {
         Created = Created + 1;
@@ -2078,7 +2094,7 @@ namespace Game {
     }
 }
 )"),
-             ScriptSection("main.ss", R"(
+             ScriptSection("main.cs", R"(
 using Game;
 void main() {
     Player p = new Player("hero");
@@ -2087,10 +2103,10 @@ void main() {
     print(Game.Created);
 }
 )")},
-            "multi.ss");
+            "multi.cs");
         expectEqual(std::size_t{4}, module->sections.size(), "3 user sections + library");
-        expectEqual(std::string("main.ss"), module->sections[2].file, "last user section");
-        expectEqual(std::string("lib/array.ss"), module->sections[3].file, "library section");
+        expectEqual(std::string("main.cs"), module->sections[2].file, "last user section");
+        expectEqual(std::string("lib/array.cs"), module->sections[3].file, "library section");
         harness.engine->invokeEntryPoint("multi");
         expectEqual(std::string("player:hero"), harness.output[0]);
         expectEqual(std::string("1"), harness.output[1]);
@@ -2102,63 +2118,63 @@ void main() {
         std::vector<Diagnostic> diagnostics;
         auto module = harness.engine->tryLoadModule(
             "bad",
-            {ScriptSection("good.ss", "int Add(int a, int b) { return a + b; }\n"),
-             ScriptSection("broken.ss", "void main() { NoSuchType value = null; }\n")},
-            "bad.ss", diagnostics);
+            {ScriptSection("good.cs", "int Add(int a, int b) { return a + b; }\n"),
+             ScriptSection("broken.cs", "void main() { NoSuchType value = null; }\n")},
+            "bad.cs", diagnostics);
         expectTrue(module == nullptr, "expected a compile failure");
         bool found = false;
         std::string all;
         for (const auto& diagnostic : diagnostics) {
             all += diagnostic.toString() + "\n";
-            if (diagnostic.file == "broken.ss" && diagnostic.code == "E0215") found = true;
+            if (diagnostic.file == "broken.cs" && diagnostic.code == "E0215") found = true;
         }
-        if (!found) throw std::runtime_error("expected E0215 in broken.ss, got:\n" + all);
+        if (!found) throw std::runtime_error("expected E0215 in broken.cs, got:\n" + all);
     });
 
     test("section line offsets shift reported lines", [] {
         TestEngine harness;
         std::vector<Diagnostic> diagnostics;
         auto module = harness.engine->tryLoadModule(
-            "offset", {ScriptSection("frag.ss", "// header\nvoid main() { NoSuchType value; }\n", 100)},
-            "offset.ss", diagnostics);
+            "offset", {ScriptSection("frag.cs", "// header\nvoid main() { NoSuchType value; }\n", 100)},
+            "offset.cs", diagnostics);
         expectTrue(module == nullptr, "expected a compile failure");
         bool found = false;
         std::string all;
         for (const auto& diagnostic : diagnostics) {
             all += diagnostic.toString() + "\n";
-            if (diagnostic.file == "frag.ss" && diagnostic.line == 102) found = true;
+            if (diagnostic.file == "frag.cs" && diagnostic.line == 102) found = true;
         }
-        if (!found) throw std::runtime_error("expected line 102 in frag.ss, got:\n" + all);
+        if (!found) throw std::runtime_error("expected line 102 in frag.cs, got:\n" + all);
     });
 
     test("sections reload and patch method bodies", [] {
         TestEngine harness;
         harness.engine->loadModule(
-            "multi_reload", {ScriptSection("logic.ss", R"(
+            "multi_reload", {ScriptSection("logic.cs", R"(
 int Level() {
     return 1;
 }
 )"),
-                             ScriptSection("main.ss", R"(
+                             ScriptSection("main.cs", R"(
 void main() {
     print(Level());
 })")},
-            "multi_reload.ss");
+            "multi_reload.cs");
         harness.engine->invokeEntryPoint("multi_reload");
         expectEqual(std::string("1"), harness.output[0]);
 
         auto result = harness.engine->reloadModule(
-            "multi_reload", {ScriptSection("logic.ss", R"(
+            "multi_reload", {ScriptSection("logic.cs", R"(
 int Level() {
     return 5;
 }
 )"),
-                             ScriptSection("main.ss", R"(
+                             ScriptSection("main.cs", R"(
 void main() {
     print(Level());
     print(Level() + 1);
 })")},
-            "multi_reload.ss");
+            "multi_reload.cs");
         expectTrue(result.success, result.summary());
         expectEqual(std::string("method-body"), result.strategy);
         expectEqual(2, result.module->generation);
@@ -2172,7 +2188,7 @@ void main() {
         TestEngine harness;
         auto module = harness.load("void main() { }", "stdlib_section");
         expectTrue(!module->sections.empty(), "expected sections");
-        expectEqual(std::string("lib/array.ss"), module->sections.back().file, "library section name");
+        expectEqual(std::string("lib/array.cs"), module->sections.back().file, "library section name");
     });
 }
 
@@ -2258,7 +2274,7 @@ void main() {
         auto expectDiagnostic = [](const std::string& source, const std::string& code) {
             TestEngine harness;
             std::vector<Diagnostic> diagnostics;
-            auto module = harness.engine->tryLoadModule("bad", source, "bad.ss", diagnostics);
+            auto module = harness.engine->tryLoadModule("bad", source, "bad.cs", diagnostics);
             expectTrue(module == nullptr, "expected compilation failure for " + code);
             bool found = false;
             std::string all;
@@ -2281,7 +2297,7 @@ void testDiagnosticQuality() {
     auto collect = [](const std::string& source) {
         auto harness = std::make_unique<TestEngine>();
         std::vector<Diagnostic> diagnostics;
-        auto module = harness->engine->tryLoadModule("bad", source, "bad.ss", diagnostics);
+        auto module = harness->engine->tryLoadModule("bad", source, "bad.cs", diagnostics);
         expectTrue(module == nullptr, "expected a compile failure");
         return diagnostics;
     };
@@ -2444,7 +2460,7 @@ void main() {
         auto expectDiagnostic = [](const std::string& source, const std::string& code) {
             TestEngine harness;
             std::vector<Diagnostic> diagnostics;
-            auto module = harness.engine->tryLoadModule("bad", source, "bad.ss", diagnostics);
+            auto module = harness.engine->tryLoadModule("bad", source, "bad.cs", diagnostics);
             expectTrue(module == nullptr, "expected compilation failure for " + code);
             bool found = false;
             std::string all;
@@ -2572,7 +2588,7 @@ void main() {
         auto expectDiagnostic = [](const std::string& source, const std::string& code) {
             TestEngine harness;
             std::vector<Diagnostic> diagnostics;
-            auto module = harness.engine->tryLoadModule("bad", source, "bad.ss", diagnostics);
+            auto module = harness.engine->tryLoadModule("bad", source, "bad.cs", diagnostics);
             expectTrue(module == nullptr, "expected compilation failure for " + code);
             bool found = false;
             std::string all;
@@ -2665,7 +2681,7 @@ void main() {
         auto expectDiagnostic = [](const std::string& source, const std::string& code) {
             TestEngine harness;
             std::vector<Diagnostic> diagnostics;
-            auto module = harness.engine->tryLoadModule("bad", source, "bad.ss", diagnostics);
+            auto module = harness.engine->tryLoadModule("bad", source, "bad.cs", diagnostics);
             expectTrue(module == nullptr, "expected compilation failure for " + code);
             bool found = false;
             std::string all;
@@ -2794,7 +2810,7 @@ void main() {
         auto expectDiagnostic = [](const std::string& source, const std::string& code) {
             TestEngine harness;
             std::vector<Diagnostic> diagnostics;
-            auto module = harness.engine->tryLoadModule("bad", source, "bad.ss", diagnostics);
+            auto module = harness.engine->tryLoadModule("bad", source, "bad.cs", diagnostics);
             expectTrue(module == nullptr, "expected compilation failure for " + code);
             bool found = false;
             std::string all;
@@ -2913,7 +2929,7 @@ void main() {
         auto expectDiagnostic = [](const std::string& source, const std::string& code) {
             TestEngine harness;
             std::vector<Diagnostic> diagnostics;
-            auto module = harness.engine->tryLoadModule("bad", source, "bad.ss", diagnostics);
+            auto module = harness.engine->tryLoadModule("bad", source, "bad.cs", diagnostics);
             expectTrue(module == nullptr, "expected compilation failure for " + code);
             bool found = false;
             std::string all;
@@ -3150,7 +3166,7 @@ void testCompileErrors() {
     test("syntax error is reported with location", [] {
         TestEngine harness;
         std::vector<Diagnostic> diagnostics;
-        auto module = harness.engine->tryLoadModule("bad", "void main() { int x = ; }", "bad.ss", diagnostics);
+        auto module = harness.engine->tryLoadModule("bad", "void main() { int x = ; }", "bad.cs", diagnostics);
         expectTrue(module == nullptr, "expected compilation failure");
         bool hasError = false;
         for (const auto& diagnostic : diagnostics) {
@@ -3169,7 +3185,7 @@ void main() {
     int x = "text";
     y = 1;
 })",
-            "bad.ss", diagnostics);
+            "bad.cs", diagnostics);
         expectTrue(module == nullptr, "expected compilation failure");
         bool conversion = false;
         bool unknown = false;
@@ -3186,7 +3202,7 @@ void main() {
         TestEngine harness;
         std::vector<Diagnostic> diagnostics;
         auto module = harness.engine->tryLoadModule(
-            "bad", "int f(int x) { if (x > 0) { return 1; } }", "bad.ss", diagnostics);
+            "bad", "int f(int x) { if (x > 0) { return 1; } }", "bad.cs", diagnostics);
         expectTrue(module == nullptr, "expected compilation failure");
         bool found = false;
         for (const auto& diagnostic : diagnostics) {
@@ -3284,7 +3300,7 @@ void main() {
         harness.engine->invokeEntryPoint("game");
         expectEqual(std::string("v1 90 1 old"), harness.output[0]);
 
-        auto result = harness.engine->reloadModule("game", v2, "game.ss");
+        auto result = harness.engine->reloadModule("game", v2, "game.cs");
         expectTrue(result.success, result.summary());
         expectEqual(2, result.module->generation);
         bool health = false;
@@ -3305,7 +3321,7 @@ void main() {
         harness.load(v1, "game");
         harness.engine->invokeEntryPoint("game");
 
-        auto result = harness.engine->reloadModule("game", "void main() { this is not valid }", "game.ss");
+        auto result = harness.engine->reloadModule("game", "void main() { this is not valid }", "game.cs");
         expectTrue(!result.success, "reload should fail");
         expectTrue(!result.diagnostics.empty(), "expected diagnostics");
         expectEqual(1, harness.engine->getModule("game")->generation);
@@ -3328,7 +3344,7 @@ void main() { print(compute(10)); }
 int compute(int x) { return x * x; }
 void main() { print(compute(10)); }
 )",
-                                                   "calc.ss");
+                                                   "calc.cs");
         expectTrue(result.success, result.summary());
         harness.engine->invokeEntryPoint("calc");
         expectEqual(std::string("100"), harness.output[1]);
@@ -3355,7 +3371,7 @@ void main() {
     print(Level());
     print(hits);
 })",
-                                                   "patch.ss");
+                                                   "patch.cs");
         expectTrue(result.success, result.summary());
         expectEqual(std::string("method-body"), result.strategy);
         expectTrue(result.patchedFunctions > 0, "expected bodies to be patched");
@@ -3386,7 +3402,7 @@ void main() {
     print(probe());
     print(Level());
 })",
-                                                   "delegate_patch.ss");
+                                                   "delegate_patch.cs");
         expectTrue(result.success, result.summary());
         expectEqual(std::string("method-body"), result.strategy);
 
@@ -3412,7 +3428,7 @@ void main() {
     print(Value());
     print(Extra());
 })",
-                                                   "attach.ss");
+                                                   "attach.cs");
         expectTrue(result.success, result.summary());
         expectEqual(std::string("method-body"), result.strategy);
 
@@ -3438,7 +3454,7 @@ int Run() { return Apply(x => x + 10); }
 void main() {
     print(Run());
 })",
-                                                   "closure_patch.ss");
+                                                   "closure_patch.cs");
         expectTrue(result.success, result.summary());
         expectEqual(std::string("method-body"), result.strategy);
 
@@ -3473,7 +3489,7 @@ void main() {
     Box box = new Box();
     print(box.v + box.extra + total);
 })",
-                                                   "fallback.ss");
+                                                   "fallback.cs");
         expectTrue(result.success, result.summary());
         expectEqual(std::string("module"), result.strategy);
         expectTrue(!result.fallbackReasons.empty(), "expected a fallback reason");
@@ -3503,7 +3519,7 @@ class Box {
 }
 void main() { print(new Box().v); }
 )",
-                                                   "strict.ss");
+                                                   "strict.cs");
         expectTrue(!result.success, "structural change must not be patched in place");
         expectTrue(!result.fallbackReasons.empty(), "expected a reason");
         expectEqual(1, harness.engine->getModule("strict")->generation);
@@ -3515,7 +3531,7 @@ void main() { print(new Box().v); }
 Array<int> values = new Array<int>();
 void main() {
     values.Add(1);
-    print(values.Count());
+    print(values.Count);
 })",
                      "stdlib_reload");
         harness.engine->invokeEntryPoint("stdlib_reload");
@@ -3526,10 +3542,10 @@ Array<int> values = new Array<int>();
 void main() {
     values.Add(2);
     values.Add(3);
-    print(values.Count());
+    print(values.Count);
     print(values.IndexOf(3));
 })",
-                                                   "stdlib_reload.ss");
+                                                   "stdlib_reload.cs");
         expectTrue(result.success, result.summary());
         expectEqual(std::string("method-body"), result.strategy);
 
@@ -3567,7 +3583,7 @@ void main() { print("x" + value); }
         auto module = harness.load(R"(
 void main() {
     string s = "hello";
-    print(s.length);
+    print(s.Length);
 }
 )",
                                    "d");

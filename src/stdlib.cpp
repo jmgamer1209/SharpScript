@@ -1,6 +1,6 @@
 #include "sharpscript/stdlib.hpp"
 
-// Generated from lib/array.ss at configure time (see CMakeLists.txt).
+// Generated from lib/array.cs at configure time (see CMakeLists.txt).
 #include "stdlib_source.hpp"
 
 namespace sharpscript {

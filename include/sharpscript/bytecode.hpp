@@ -138,9 +138,6 @@ enum class OpCode : std::uint8_t {
     Cast,
     IsType,
 
-    /// In-place growth of a `T[]`; the only collection op the VM still owns.
-    ArrayPush,
-    ArrayPop,
 
     /// Pops an Exception value and starts stack unwinding.
     Throw,

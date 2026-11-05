@@ -1253,12 +1253,16 @@ ScriptType FunctionCompiler::emitMemberLoad(const MemberExpression& member, cons
         return primI32();
     }
 
-    if (targetType.isString() && (member.memberName == "length" || member.memberName == "Length")) {
+    // C# spelling only: `Length` for arrays and strings, `Count` comes from
+    // collections such as Array<T>.
+    if ((targetType.isString() || targetType.isArray()) && member.memberName == "Length") {
         emit(OpCode::Length, 0, 0);
         return primI32();
     }
-    if (targetType.isArray() && (member.memberName == "length" || member.memberName == "Length" ||
-                                 member.memberName == "count" || member.memberName == "Count")) {
+    if (targetType.isArray() && (member.memberName == "length" || member.memberName == "count" ||
+                                 member.memberName == "Count")) {
+        modules_.error("E0457", "arrays expose 'Length'; use Array<T>.Count for a growable collection",
+                       member);
         emit(OpCode::Length, 0, 0);
         return primI32();
     }
@@ -1567,13 +1571,14 @@ ScriptType FunctionCompiler::compileMemberCall(const MemberExpression& member, c
         return target->returnType;
     }
 
-    if (targetType.isString()) return compileStringMethod(member, call);
-    if (targetType.isArray()) return compileArrayMethod(member, call, targetType);
-
+    // `ToString()` works on every type (C# object member), including strings.
     if (member.memberName == "ToString" && call.arguments.empty()) {
         emit(OpCode::ConvStr, 0, 0);
         return primString();
     }
+
+    if (targetType.isString()) return compileStringMethod(member, call);
+    if (targetType.isArray()) return compileArrayMethod(member, call, targetType);
 
     modules_.error("E0333", "type '" + targetType.name + "' has no method named '" + member.memberName + "'",
                    call);
@@ -1704,16 +1709,11 @@ ScriptType FunctionCompiler::compileStaticMemberCall(const MemberExpression& mem
 }
 
 std::vector<NativeFunction*>* FunctionCompiler::findStringMethods(const std::string& name) {
+    // Names match C# exactly (PascalCase); there is no camelCase fallback so a
+    // script that compiles here also compiles with Roslyn.
     auto* stringType = modules_.engine().stringMethods();
     auto it = stringType->methods.find(name);
     if (it != stringType->methods.end()) return &it->second;
-    // C# naming is PascalCase; the native table is registered with camelCase.
-    if (!name.empty()) {
-        std::string alias = name;
-        alias[0] = static_cast<char>(std::tolower(static_cast<unsigned char>(alias[0])));
-        it = stringType->methods.find(alias);
-        if (it != stringType->methods.end()) return &it->second;
-    }
     return nullptr;
 }
 
@@ -1752,33 +1752,13 @@ ScriptType FunctionCompiler::compileStringMethod(const MemberExpression& member,
 
 ScriptType FunctionCompiler::compileArrayMethod(const MemberExpression& member, const CallExpression& call,
                                                 const ScriptType& arrayType) {
-    ScriptType elementType = arrayType.element ? *arrayType.element : primI32();
-
-    if (member.memberName == "push" || member.memberName == "add") {
-        if (call.arguments.size() != 1) {
-            modules_.error("E0343", "'push' takes exactly one argument", call);
-            return primVoid();
-        }
-        compileExpression(*call.arguments[0], &elementType);
-        emit(OpCode::ArrayPush, 0, -2);
-        return primVoid();
-    }
-    if (member.memberName == "pop") {
-        if (!call.arguments.empty()) modules_.error("E0344", "'pop' takes no arguments", call);
-        emit(OpCode::ArrayPop, 0, 0);
-        return elementType;
-    }
-    if (member.memberName == "clear" || member.memberName == "indexOf" ||
-        member.memberName == "contains" || member.memberName == "insert" ||
-        member.memberName == "removeAt") {
-        modules_.error("E0446",
-                       "'" + member.memberName + "' is not available on 'T[]'; use the script library " +
-                           "Array<T> (Add/Insert/RemoveAt/Clear/IndexOf/Contains)",
-                       call);
-        return primI32();
-    }
-
-    modules_.error("E0345", "array has no method named '" + member.memberName + "'", call);
+    // `T[]` is C#-shaped: fixed length, indexed access and `Length` only. Every
+    // collection algorithm lives in the script library `Array<T>`.
+    modules_.error("E0446",
+                   "'" + member.memberName + "' is not available on 'T[]'; use the script library " +
+                       "Array<T> (Add/Insert/RemoveAt/Clear/IndexOf/Contains) or List<T> semantics",
+                   call);
+    (void)arrayType;
     return primI32();
 }
 
@@ -3320,10 +3300,7 @@ std::optional<ScriptType> FunctionCompiler::inferType(const Expression& expressi
         if (auto* native = dynamic_cast<NativeObjectType*>(targetType->object)) {
             if (auto* property = native->findProperty(member->memberName)) return property->type;
         }
-        if (targetType->isString() && (member->memberName == "length" || member->memberName == "Length"))
-            return primI32();
-        if (targetType->isArray() && (member->memberName == "length" || member->memberName == "Length" ||
-                                      member->memberName == "count" || member->memberName == "Count"))
+        if ((targetType->isString() || targetType->isArray()) && member->memberName == "Length")
             return primI32();
         return std::nullopt;
     }
@@ -3435,15 +3412,7 @@ std::optional<ScriptType> FunctionCompiler::inferCallType(const CallExpression& 
                 }
             }
         }
-        if (targetType->isArray()) {
-            if (member->memberName == "pop") return *targetType->element;
-            if (member->memberName == "indexOf") return primI32();
-            if (member->memberName == "contains") return primBool();
-            if (member->memberName == "push" || member->memberName == "add" ||
-                member->memberName == "clear" || member->memberName == "insert" ||
-                member->memberName == "removeAt")
-                return primVoid();
-        }
+
         if (member->memberName == "ToString" && call.arguments.empty()) return primString();
     }
     return std::nullopt;

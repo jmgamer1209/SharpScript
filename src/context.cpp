@@ -931,26 +931,6 @@ Value ExecutionContext::invokeFunction(ScriptFunction* function, std::vector<Val
                 break;
             }
 
-            case OpCode::ArrayPush: {
-                Value value = pop();
-                auto array = pop().asArray();
-                if (!array) throwRuntime("null reference while pushing to an array", function, pc - 1);
-                array->items().push_back(convertArgument(value, *array->elementType(), function));
-                break;
-            }
-            case OpCode::ArrayPop: {
-                auto array = pop().asArray();
-                if (!array) throwRuntime("null reference while popping from an array", function, pc - 1);
-                if (array->items().empty()) throwRuntime("cannot pop from an empty array", function, pc - 1);
-                Value value = array->items().back();
-                array->items().pop_back();
-                if (array->elementType() && array->elementType()->isStruct()) {
-                    value = cloneStructValue(value, engine_.garbageCollector());
-                }
-                push(value);
-                break;
-            }
-
             case OpCode::Throw: {
                 Value exception = pop();
                 if (exception.isNull()) {

@@ -18,7 +18,7 @@ std::vector<ScriptSection> withStandardLibrary(const EngineSettings& settings,
                                                const std::vector<ScriptSection>& sections) {
     std::vector<ScriptSection> result = sections;
     if (settings.useScriptStandardLibrary) {
-        result.emplace_back("lib/array.ss", scriptStandardLibrary());
+        result.emplace_back("lib/array.cs", scriptStandardLibrary());
     }
     return result;
 }
@@ -60,6 +60,7 @@ ScriptEngine::ScriptEngine() : hotReload_(std::make_unique<HotReloadManager>(*th
     };
     initializeStringMethods();
     initializeExceptionTypes();
+    initializeConsoleType();
 
     addGlobalFunction(
         "print", primVoid(), {},
@@ -77,6 +78,15 @@ ScriptEngine::ScriptEngine() : hotReload_(std::make_unique<HotReloadManager>(*th
             return Value::voidValue();
         },
         true);
+
+    // `Equals(a, b)` mirrors C#'s static object.Equals, so scripts can compare
+    // generic values without relying on `==` (which C# forbids for unconstrained T).
+    addGlobalFunction(
+        "Equals", primBool(), {primVar(), primVar()},
+        [](ExecutionContext&, const Value&, const std::vector<Value>& args) {
+            const bool equal = args.size() == 2 && ValueOps::areEqual(args[0], args[1]);
+            return Value::boolean(equal);
+        });
 
     addGlobalFunction(
         "assert", primVoid(), {},
@@ -135,6 +145,49 @@ NativeObjectType& ScriptEngine::createNativeType(const std::string& typeName, bo
     nativeTypeStorage_.push_back(std::move(type));
     nativeTypes_[typeName] = raw;
     return *raw;
+}
+
+void ScriptEngine::initializeConsoleType() {
+    // C# style output: `System.Console.WriteLine(...)`, so scripts stay valid C#.
+    auto& console = createNativeType("System.Console", true);
+    NativeObjectType* typePointer = &console;
+
+    auto emit = [this](const Value& value, bool newline) {
+        std::string line = value.display();
+        if (newline) {
+            if (settings.output) {
+                settings.output(line);
+            } else {
+                std::cout << line << std::endl;
+            }
+        } else if (settings.output) {
+            settings.output(line);
+        } else {
+            std::cout << line;
+        }
+        return Value::voidValue();
+    };
+    auto addWriter = [&](const std::string& methodName, bool newline) {
+        const std::vector<ScriptType> overloads{primString(), primI32(), primI64(), primF64(), primBool(),
+                                                primChar()};
+        for (const auto& parameterType : overloads) {
+            addMethod(
+                console, methodName, primVoid(), {parameterType},
+                [emit, newline](ExecutionContext&, const Value&, const std::vector<Value>& args) {
+                    return emit(args.empty() ? Value::null() : args[0], newline);
+                },
+                true);
+        }
+        addMethod(
+            console, methodName, primVoid(), {},
+            [emit, newline](ExecutionContext&, const Value&, const std::vector<Value>&) {
+                return emit(Value::string(u""), newline);
+            },
+            true);
+    };
+    addWriter("WriteLine", true);
+    addWriter("Write", false);
+    (void)typePointer;
 }
 
 void ScriptEngine::initializeExceptionTypes() {

@@ -11,7 +11,7 @@
 - VM 实现语言：**C++17**（不是 C#）
 
 ```text
-脚本源码 (.ss)
+脚本源码 (.cs)
    │  Tokenizer            词法分析
    │  Parser → AST         递归下降语法分析
    │  ModuleCompiler       声明收集 / 类布局 / 虚表 / 类型检查
@@ -33,12 +33,12 @@ ScriptModule (generation N)
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
 
-build\Release\sharpscript_cli.exe run samples/hello.ss
-build\Release\sharpscript_cli.exe run samples/oop.ss
-build\Release\sharpscript_cli.exe run samples/native.ss
-build\Release\sharpscript_cli.exe disasm samples/hello.ss
-build\Release\sharpscript_cli.exe reload samples/hotreload.ss samples/hotreload.v2.ss
-build\Release\sharpscript_cli.exe watch samples/hotreload.ss
+build\Release\sharpscript_cli.exe run samples/hello.cs
+build\Release\sharpscript_cli.exe run samples/oop.cs
+build\Release\sharpscript_cli.exe run samples/native.cs
+build\Release\sharpscript_cli.exe disasm samples/hello.cs
+build\Release\sharpscript_cli.exe reload samples/hotreload.cs samples/hotreload.v2.cs
+build\Release\sharpscript_cli.exe watch samples/hotreload.cs
 build\Release\sharpscript_cli.exe repl
 
 build\Release\sharpscript_tests.exe
@@ -49,11 +49,45 @@ build\Release\sharpscript_tests.exe
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-./build/sharpscript_cli run samples/hello.ss
+./build/sharpscript_cli run samples/hello.cs
 ./build/sharpscript_tests
 ```
 
 > `watch` 使用 `std::filesystem::last_write_time` 轮询检测文件变化，跨平台无需额外依赖。
+
+---
+
+## 与 C# 的兼容性
+
+脚本后缀是 `.cs`，语法目标是与 C# 一致，`lib/array.cs` 与 `samples/*.cs` 都能**被 Roslyn 直接编译**。
+这一点由测试套件里的 `csharp_compat` 强制校验（检测到 `dotnet` 时自动启用）：
+
+```powershell
+ctest --test-dir build -C Release -R csharp_compat
+# 内部会生成两个临时工程（Library 输出），用 dotnet build 编译
+# lib/array.cs + samples/{hello,oop,native,hotreload}.cs + Host 桩
+```
+
+已对齐的部分：
+
+| 能力 | 说明 |
+| --- | --- |
+| 入口 | 全局 `main` / `Main`，或任意类里的 `public static void Main()` |
+| 输出 | `using System; Console.WriteLine(...)`（`print(...)` 仍是内建别名，非 C# 语法） |
+| 数组 | `T[]` 定长、`Length`、`new T[] { ... }`（无 `push`/`pop`/小写 `length`） |
+| 集合 | `Array<T>`（`Count` 为只读属性、`Add`/`Insert`/`RemoveAt`/`IndexOf`…） |
+| 类型 | class / struct / 继承 / 抽象 / 泛型类与泛型方法 / 泛型委托与变型 / 属性 / 终结器 / `where` 约束 |
+| 表达式 | lambda、`Func<>`/`Action<>`、`is`/`as`、`?.` 之外的大部分表达式 |
+
+尚未对齐（会让 Roslyn 编译失败的地方）：
+
+| 项 | 现状 |
+| --- | --- |
+| 字符串方法命名 | 已对齐（`ToUpper` / `Substring` / `Split` / `TrimStart` …），camelCase 写法会报 `E0340` |
+| 接口 | 未实现（`IDisposable`/`IEnumerable` 等都没有），因此没有 `using` 语句 |
+| 其它 | `?.`、字符串插值、`out var`、`switch` 表达式、表达式体成员、特性、`List<T>`/`Dictionary<K,V>` |
+
+因此**当前样例与库**可以被 C# 编译；但只要用到上表第二组的写法就还不行。`csharp_compat` 会持续守住这条线。
 
 ---
 
@@ -84,7 +118,7 @@ src/
   builder.cpp compiler.cpp function_compiler.cpp
   module.cpp engine.cpp context.cpp native.cpp
   stdlib.cpp method_reload.cpp hot_reload.cpp disassembler.cpp
-lib/array.ss           脚本标准库（构建期嵌入，见 Array<T> 一节）
+lib/array.cs           脚本标准库（构建期嵌入，见 Array<T> 一节）
 cli/main.cpp           run / watch / reload / disasm / repl
 tests/main.cpp         控制台测试运行器（128 个用例）
 samples/               示例脚本
@@ -164,7 +198,7 @@ void main()
 
 C# 的值语义：
 
-- **复制边界**：局部/全局赋值、函数传参、返回值、字段与数组元素写入、`foreach` 迭代变量、`push` 都会复制；
+- **复制边界**：局部/全局赋值、函数传参、返回值、字段与数组元素写入、`foreach` 迭代变量都会复制；
 - **共享的部分**：struct 内部的 `class` / 数组 / `string` 引用字段复制的是引用（浅层共享），与 C# 一致；
 - **不可为 null**：`S s = null;` 是编译错误（`E0374`），`S` 与 `class` 之间不能互相转换；
 - **没有继承/虚派发**：struct 不能有基类、不能被继承，方法不能 `abstract`/`virtual`/`override`，调用点总是静态派发；
@@ -218,27 +252,27 @@ using Game.Core;                        // 导入命名空间成员
 
 ```cpp
 engine.loadModule("game", {
-    {"player.ss", playerSource},
-    {"main.ss",   mainSource},
+    {"player.cs", playerSource},
+    {"main.cs",   mainSource},
 });
 ```
 
 ```csharp
-// player.ss
+// player.cs
 namespace Game { class Player { public string name = "hero"; } }
 
-// main.ss —— 不需要 import，也不需要额外声明
+// main.cs —— 不需要 import，也不需要额外声明
 using Game;
 void main() { Player p = new Player(); print(p.name); }
 ```
 
-- 声明顺序无关：编译是先收集全部声明（类、委托、函数）再解析、再编译函数体，所以 `main.ss` 可以引用 `player.ss` 里稍后出现的类型，反之亦然。
+- 声明顺序无关：编译是先收集全部声明（类、委托、函数）再解析、再编译函数体，所以 `main.cs` 可以引用 `player.cs` 里稍后出现的类型，反之亦然。
 - `ScriptSection{file, source, lineOffset}`：`file` 用于诊断与异常定位，`lineOffset` 让“从大文件里截出来的片段”继续报告原始行号。
-- 诊断按 section 反查：`error("player.ss(12,5): ...")`，不再是整个模块一个文件名。
+- 诊断按 section 反查：`error("player.cs(12,5): ...")`，不再是整个模块一个文件名。
 - 重载接受同样形式的 section 列表：`engine.reloadModule("game", sections)`；方法体热更与 section 数量无关，改一个文件仍然只替换变化的函数体。
-- CLI 支持多文件：`sharpscript_cli run main.ss player.ss util.ss`（第一个文件决定模块名）。
-- 标准库本身也是一个 section（名为 `lib/array.ss`，见 `Array<T>` 一节），因此它的诊断不会污染用户文件的行号。
-- CLI 的 `--no-stdlib` 可以关掉内置库：用来单独校验 `lib/array.ss`（`sharpscript_cli --no-stdlib disasm lib/array.ss`），
+- CLI 支持多文件：`sharpscript_cli run main.cs player.cs util.cs`（第一个文件决定模块名）。
+- 标准库本身也是一个 section（名为 `lib/array.cs`，见 `Array<T>` 一节），因此它的诊断不会污染用户文件的行号。
+- CLI 的 `--no-stdlib` 可以关掉内置库：用来单独校验 `lib/array.cs`（`sharpscript_cli --no-stdlib disasm lib/array.cs`），
   或换成自己的实现。
 - `ScriptModule::sections` / `sectionStartLines` 保留了来源信息，宿主可用 `module.fileOfLine(line)` 反查某行属于哪个文件。
 - 限制：`using` 目前是**模块级**的（不区分 section），比 C# 的“文件级 `using`”略宽松；section 不提供独立编译或独立回退，结构变化仍然整模块重载。
@@ -570,47 +604,67 @@ void main() {
 
 ### 字符串
 
-`Length` 属性；`Substring` `IndexOf` `LastIndexOf` `Contains` `StartsWith` `EndsWith`
-`ToUpper` `ToLower` `Trim` `Replace` `Split` `IsEmpty` `ToString`（C# 风格的 PascalCase 命名）。
+方法名与 C# **完全一致**（PascalCase），不再提供 camelCase 别名（写 `s.toUpper()` 会报 `E0340`）：
+
+| 实例成员 | 重载 |
+| --- | --- |
+| `Length` | 属性 |
+| `Substring` | `(int)` / `(int, int)` |
+| `IndexOf` | `(string)` / `(string, int)` / `(char)` |
+| `LastIndexOf` | `(string)` / `(char)` |
+| `Contains` | `(string)` / `(char)` |
+| `StartsWith` / `EndsWith` | `(string)` / `(char)` |
+| `ToUpper` / `ToLower` | 无参 |
+| `Trim` / `TrimStart` / `TrimEnd` | 无参 |
+| `Replace` | `(string, string)` / `(char, char)` |
+| `Split` | `(string)` / `(char)`，返回 `string[]` |
+| `ToString` | 无参（所有类型都有，编译期转 `ConvStr`） |
+
 `+` 遇到任意一边是 `string` 时自动把另一边转成字符串；`null` 参与拼接时视为空串。
 `string.Empty`、`string.IsNullOrEmpty(s)` 也可用（后者在编译期内联）。
 `null` 字符串的成员访问（如 `s.Length`）会抛出 `null reference` 运行时错误。
 
 ### 数组
 
-`T[]` 只保留**存储层**能力：`new T[n]` / `new T[] { ... }`、`a[i]`、`Length` / `Count`（兼容小写 `length` / `count`）、
-`push` / `pop`（就地增长/收缩，对应两条 `ArrayPush` / `ArrayPop` 指令）。
-越界、空数组 `pop`、空引用都会抛出带脚本调用栈的运行时错误。
+`T[]` 与 C# 完全一致：只有**存储层**能力——`new T[n]` / `new T[] { ... }`、`a[i]`、`Length`。
+它是**定长**的，没有任何方法（`push` / `pop` / `insert` / `removeAt` / `clear` / `indexOf` / `contains` 全部不存在，
+调用会报 `E0446`）。越界与空引用会抛出带脚本调用栈的运行时错误。
 
-集合算法（`insert` / `removeAt` / `clear` / `indexOf` / `contains`）**不是数组的一部分**，
-而是在脚本标准库的 `Array<T>` 里实现的——与 C# 一致（`T[]` 定长，`List<T>` 才有 `Add`/`Insert`）。
-在数组上调用它们会报 `E0446` 并提示迁移。
+需要可增长集合时用标准库的 `Array<T>`（对应 C# 的 `List<T>`）。
+
+> 迁移提示：`a.length` → `a.Length`；`a.push(x)` → `list.Add(x)`；`a.count` → `list.Count`。
 
 ### Array<T>（脚本标准库）
 
-标准库是仓库里的**真实脚本文件** `lib/array.ss`：CMake 在配置期把它嵌入生成的
-`stdlib_source.hpp`（二进制自包含），引擎再把它作为名为 `lib/array.ss` 的 section 追加到每个模块。
+标准库是仓库里的**真实脚本文件** `lib/array.cs`：CMake 在配置期把它嵌入生成的
+`stdlib_source.hpp`（二进制自包含），引擎再把它作为名为 `lib/array.cs` 的 section 追加到每个模块。
 目前提供 `Array<T>`：
 
 ```csharp
-void main() {
-    Array<int> numbers = new Array<int>();
-    numbers.Add(3);
-    numbers.Add(5);
-    numbers.Insert(1, 4);      // 3, 4, 5
-    print(numbers.Count());    // 3
-    print(numbers.Get(1));     // 4
-    print(numbers.IndexOf(5)); // 2
-    print(numbers.Contains(9));// false
-    numbers.RemoveAt(0);
-    numbers.Set(0, 9);
-    numbers.ForEach(v => print(v));
-    numbers.Clear();
+using System;
 
-    Array<string> names = new Array<string>();
-    names.Reserve(8);          // 预分配容量
-    names.Add("a");
-    string[] raw = names.ToArray();
+class Demo
+{
+    public static void Main()
+    {
+        Array<int> numbers = new Array<int>();
+        numbers.Add(3);
+        numbers.Add(5);
+        numbers.Insert(1, 4);              // 3, 4, 5
+        Console.WriteLine(numbers.Count);  // 3
+        Console.WriteLine(numbers.Get(1)); // 4
+        Console.WriteLine(numbers.IndexOf(5)); // 2
+        Console.WriteLine(numbers.Contains(9)); // False
+        numbers.RemoveAt(0);
+        numbers.Set(0, 9);
+        numbers.ForEach(v => Console.WriteLine(v));
+        numbers.Clear();
+
+        Array<string> names = new Array<string>();
+        names.Reserve(8);                  // 预分配容量
+        names.Add("a");
+        string[] raw = names.ToArray();
+    }
 }
 ```
 
@@ -618,13 +672,13 @@ void main() {
 - `T` 可以是原始类型、`string`、脚本 `class`、`struct`、数组、委托，甚至是 `Array<U>`（嵌套泛型）。
   元素遵循值/引用语义：`struct` 元素取值即复制，`class` 元素取值即共享。
 - 没有 `foreach`（`foreach` 只接受数组和 `string`），请用索引 `for` 或 `ForEach(Action<T>)`。
-- 语言不支持构造函数重载，因此没有 `new Array<T>(capacity)`，用 `Reserve` 代替；`Count` 是方法不是属性。
+- 语言不支持构造函数重载，因此没有 `new Array<T>(capacity)`，用 `Reserve` 代替；`Count` 是**只读属性**（`list.Count`，与 C# 一致）。
 - `Array<T>` 与其他泛型类一样是**恒定**（invariant）：`Array<Dog>` 不能赋给 `Array<Animal>`。
-- 因为泛型类会**立即实例化全部成员**，`IndexOf`/`Contains` 依赖 `T` 的 `==`；
-  原始类型、引用类型与同类型 `struct` 都可用，但如果将来给 `T` 加入不可比较的类型，需要单独处理。
+- `IndexOf`/`Contains` 用内建的 `Equals(a, b)` 比较（等价于 C# 的 `object.Equals`），因此不受"泛型参数不能用 `==`"的 C# 限制；
+  比较是值语义的：原始类型按值、`struct` 逐字段、引用类型按引用身份。
 - 不想注入这段库（例如宿主自带同名类型）时，设 `settings.useScriptStandardLibrary = false`：
   此时 `Array<T>` 变成未知类型（`E0430`），其余语言特性不受影响。
-- 库文件可以单独校验：`sharpscript_cli --no-stdlib disasm lib/array.ss` 只编译这份脚本，
+- 库文件可以单独校验：`sharpscript_cli --no-stdlib disasm lib/array.cs` 只编译这份脚本，
   库语法演进时能立刻发现；它也可以被宿主自己的实现替换。
 
 ---
@@ -670,8 +724,10 @@ void main() {
 闭包      NewCell LoadCell StoreCell
 引用      MakeRefCell MakeRefGlobal MakeRefField MakeRefElem LoadRef StoreRef
 类型      Cast IsType
-数组      ArrayPush ArrayPop
 ```
+
+数组只保留存储原语（`NewArray` / `LoadElem` / `StoreElem` / `Length`）：增长、插入、查找等算法全部在
+`lib/array.cs` 的 `Array<T>` 里用脚本实现，VM 不再有任何集合算法指令。
 
 `disasm` 输出示例：
 
@@ -702,9 +758,9 @@ void main() {
 - 运行时错误会被包装成脚本异常（可被 `catch` 捕获），未捕获时在宿主边界构造脚本调用栈：
 
 ```text
-samples/hello.ss(20): runtime error: array index 5 is out of range (length 2)
-  at divide (samples/hello.ss:3)
-  at main (samples/hello.ss:5)
+samples/hello.cs(20): runtime error: array index 5 is out of range (length 2)
+  at divide (samples/hello.cs:3)
+  at main (samples/hello.cs:5)
 ```
 
 - 整数除零、空引用解引用、越界、负数数组长度、抽象方法调用、调用深度超限等均有明确诊断。
@@ -808,7 +864,7 @@ engine.addProperty(counter, "Value", primI32(),
 engine.addGlobalFunction("print", primVoid(), {}, myPrintImplementation, /*isVariadic=*/true);
 
 // 使用
-engine.loadModule("game", scriptSource, "game.ss");
+engine.loadModule("game", scriptSource, "game.cs");
 engine.invokeEntryPoint("game");
 ```
 
@@ -854,9 +910,9 @@ void main() {
 
 ```cpp
 auto engine = std::make_unique<ScriptEngine>();
-auto module = engine->loadModule("game", sourceV1, "game.ss");
+auto module = engine->loadModule("game", sourceV1, "game.cs");
 
-auto result = engine->reloadModule("game", sourceV2, "game.ss");
+auto result = engine->reloadModule("game", sourceV2, "game.cs");
 if (!result.success) {
     for (const auto& diagnostic : result.diagnostics) {
         std::cerr << diagnostic.toString() << "\n";
@@ -877,7 +933,7 @@ engine->settings.reloadStrategy = ReloadStrategy::Auto;       // 默认
 engine->settings.reloadStrategy = ReloadStrategy::MethodBody; // 结构变化时直接失败
 engine->settings.reloadStrategy = ReloadStrategy::FullModule; // always 整模块
 
-auto result = engine->reloadModule("game", v2, "game.ss");
+auto result = engine->reloadModule("game", v2, "game.cs");
 result.patchedInPlace();     // true = 走的是方法体补丁
 result.patchedFunctions;     // 被替换的函数数量
 result.fallbackReasons;      // 未能就地替换的原因（例如 "class 'Box' changed layout: field count changed (1 -> 2)"）
@@ -926,11 +982,11 @@ result.fallbackReasons;      // 未能就地替换的原因（例如 "class 'Box
 ### 演示
 
 ```text
-$ sharpscript_cli reload samples/hotreload.ss samples/hotreload.v2.ss
+$ sharpscript_cli reload samples/hotreload.cs samples/hotreload.v2.cs
 loaded module 'hotreload' gen 1 ...
 v1 hello, world (#1) | views = 1
 
---- hot reloading with samples/hotreload.v2.ss ---
+--- hot reloading with samples/hotreload.v2.cs ---
 reloaded 'hotreload' gen 1->2 in 0.66 ms (preserved 2 globals, reset 1)
   preserved: views, greeter
   reset:     revision
@@ -972,7 +1028,8 @@ build\Release\sharpscript_tests.exe
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-当前：**141 passed, 0 failed**。
+当前：**142 passed, 0 failed**（脚本用例）；另有 `csharp_compat` 一项，用 `dotnet build` 校验 `lib/array.cs` 与 `samples/*.cs` 是合法 C#，
+因此 `ctest` 共 **2 项测试**。
 
 覆盖：算术/位运算/浮点、类型转换、字符串（UTF-16 长度/索引、PascalCase 方法、`null` 语义）、控制流、递归、全局初始化、
 类/继承/虚派发/静态成员、数组、命名空间（嵌套、using、静态成员、同名类型、file-scoped、热重载配对）、

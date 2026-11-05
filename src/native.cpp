@@ -107,7 +107,7 @@ void ScriptEngine::initializeStringMethods() {
     };
 
     // ---------------------------------------------------------- Substring
-    add("substring", stringType, {intType},
+    add("Substring", stringType, {intType},
         [](ExecutionContext&, const Value& self, const std::vector<Value>& args) {
             const auto& text = selfString(self);
             std::int32_t start = args[0].asI32();
@@ -117,7 +117,7 @@ void ScriptEngine::initializeStringMethods() {
             return Value::string(text.substr(static_cast<std::size_t>(start)));
         });
 
-    add("substring", stringType, {intType, intType},
+    add("Substring", stringType, {intType, intType},
         [](ExecutionContext&, const Value& self, const std::vector<Value>& args) {
             const auto& text = selfString(self);
             std::int32_t start = args[0].asI32();
@@ -131,7 +131,7 @@ void ScriptEngine::initializeStringMethods() {
         });
 
     // ---------------------------------------------------------- IndexOf
-    add("indexOf", intType, {stringType},
+    add("IndexOf", intType, {stringType},
         [](ExecutionContext&, const Value& self, const std::vector<Value>& args) {
             const auto& text = selfString(self);
             const auto& needle = argumentString(args[0], "value");
@@ -140,7 +140,7 @@ void ScriptEngine::initializeStringMethods() {
                                                                : static_cast<std::int32_t>(position));
         });
 
-    add("indexOf", intType, {stringType, intType},
+    add("IndexOf", intType, {stringType, intType},
         [](ExecutionContext&, const Value& self, const std::vector<Value>& args) {
             const auto& text = selfString(self);
             const auto& needle = argumentString(args[0], "value");
@@ -153,7 +153,7 @@ void ScriptEngine::initializeStringMethods() {
                                                                : static_cast<std::int32_t>(position));
         });
 
-    add("indexOf", intType, {charType},
+    add("IndexOf", intType, {charType},
         [](ExecutionContext&, const Value& self, const std::vector<Value>& args) {
             const auto& text = selfString(self);
             auto position = text.find(args[0].asChar());
@@ -161,7 +161,7 @@ void ScriptEngine::initializeStringMethods() {
                                                                : static_cast<std::int32_t>(position));
         });
 
-    add("lastIndexOf", intType, {stringType},
+    add("LastIndexOf", intType, {stringType},
         [](ExecutionContext&, const Value& self, const std::vector<Value>& args) {
             const auto& text = selfString(self);
             const auto& needle = argumentString(args[0], "value");
@@ -170,7 +170,7 @@ void ScriptEngine::initializeStringMethods() {
                                                                : static_cast<std::int32_t>(position));
         });
 
-    add("lastIndexOf", intType, {charType},
+    add("LastIndexOf", intType, {charType},
         [](ExecutionContext&, const Value& self, const std::vector<Value>& args) {
             const auto& text = selfString(self);
             auto position = text.rfind(args[0].asChar());
@@ -179,21 +179,21 @@ void ScriptEngine::initializeStringMethods() {
         });
 
     // ---------------------------------------------------------- Contains
-    add("contains", boolType, {stringType},
+    add("Contains", boolType, {stringType},
         [](ExecutionContext&, const Value& self, const std::vector<Value>& args) {
             const auto& text = selfString(self);
             const auto& needle = argumentString(args[0], "value");
             return Value::boolean(text.find(needle) != std::u16string::npos);
         });
 
-    add("contains", boolType, {charType},
+    add("Contains", boolType, {charType},
         [](ExecutionContext&, const Value& self, const std::vector<Value>& args) {
             const auto& text = selfString(self);
             return Value::boolean(text.find(args[0].asChar()) != std::u16string::npos);
         });
 
     // ---------------------------------------------------------- StartsWith / EndsWith
-    add("startsWith", boolType, {stringType},
+    add("StartsWith", boolType, {stringType},
         [](ExecutionContext&, const Value& self, const std::vector<Value>& args) {
             const auto& text = selfString(self);
             const auto& prefix = argumentString(args[0], "value");
@@ -201,13 +201,13 @@ void ScriptEngine::initializeStringMethods() {
                                   text.compare(0, prefix.size(), prefix) == 0);
         });
 
-    add("startsWith", boolType, {charType},
+    add("StartsWith", boolType, {charType},
         [](ExecutionContext&, const Value& self, const std::vector<Value>& args) {
             const auto& text = selfString(self);
             return Value::boolean(!text.empty() && text[0] == args[0].asChar());
         });
 
-    add("endsWith", boolType, {stringType},
+    add("EndsWith", boolType, {stringType},
         [](ExecutionContext&, const Value& self, const std::vector<Value>& args) {
             const auto& text = selfString(self);
             const auto& suffix = argumentString(args[0], "value");
@@ -215,30 +215,46 @@ void ScriptEngine::initializeStringMethods() {
                                   text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0);
         });
 
-    add("endsWith", boolType, {charType},
+    add("EndsWith", boolType, {charType},
         [](ExecutionContext&, const Value& self, const std::vector<Value>& args) {
             const auto& text = selfString(self);
             return Value::boolean(!text.empty() && text.back() == args[0].asChar());
         });
 
     // ---------------------------------------------------------- Case / Trim
-    add("toUpper", stringType, {},
+    add("ToUpper", stringType, {},
         [](ExecutionContext&, const Value& self, const std::vector<Value>&) {
             return Value::string(toUpperText(selfString(self)));
         });
 
-    add("toLower", stringType, {},
+    add("ToLower", stringType, {},
         [](ExecutionContext&, const Value& self, const std::vector<Value>&) {
             return Value::string(toLowerText(selfString(self)));
         });
 
-    add("trim", stringType, {},
+    add("Trim", stringType, {},
         [](ExecutionContext&, const Value& self, const std::vector<Value>&) {
             return Value::string(trimText(selfString(self)));
         });
 
+    add("TrimStart", stringType, {},
+        [](ExecutionContext&, const Value& self, const std::vector<Value>&) {
+            const auto& text = selfString(self);
+            std::size_t first = 0;
+            while (first < text.size() && isCSharpWhiteSpace(text[first])) ++first;
+            return Value::string(text.substr(first));
+        });
+
+    add("TrimEnd", stringType, {},
+        [](ExecutionContext&, const Value& self, const std::vector<Value>&) {
+            const auto& text = selfString(self);
+            std::size_t last = text.size();
+            while (last > 0 && isCSharpWhiteSpace(text[last - 1])) --last;
+            return Value::string(text.substr(0, last));
+        });
+
     // ---------------------------------------------------------- Replace
-    add("replace", stringType, {stringType, stringType},
+    add("Replace", stringType, {stringType, stringType},
         [](ExecutionContext&, const Value& self, const std::vector<Value>& args) {
             const auto& text = selfString(self);
             const auto& from = argumentString(args[0], "oldValue");
@@ -246,7 +262,7 @@ void ScriptEngine::initializeStringMethods() {
             return Value::string(replaceAll(text, from, to));
         });
 
-    add("replace", stringType, {charType, charType},
+    add("Replace", stringType, {charType, charType},
         [](ExecutionContext&, const Value& self, const std::vector<Value>& args) {
             std::u16string result = selfString(self);
             char16_t from = args[0].asChar();
@@ -257,19 +273,10 @@ void ScriptEngine::initializeStringMethods() {
             return Value::string(std::move(result));
         });
 
-    // ---------------------------------------------------------- Misc
-    add("isEmpty", boolType, {},
-        [](ExecutionContext&, const Value& self, const std::vector<Value>&) {
-            return Value::boolean(selfString(self).empty());
-        });
-
-    add("toString", stringType, {},
-        [](ExecutionContext&, const Value& self, const std::vector<Value>&) {
-            return Value::string(selfString(self));
-        });
-
+    // `IsEmpty`/`ToString` are gone: C# spells them `string.IsNullOrEmpty(s)` and
+    // `x.ToString()`, both of which the compiler already lowers itself.
     // ---------------------------------------------------------- Split
-    add("split", stringArray, {stringType},
+    add("Split", stringArray, {stringType},
         [this](ExecutionContext&, const Value& self, const std::vector<Value>& args) {
             const auto& text = selfString(self);
             const auto& separator = argumentString(args[0], "separator");
@@ -291,7 +298,7 @@ void ScriptEngine::initializeStringMethods() {
             return makeStringArray(*this, std::move(parts));
         });
 
-    add("split", stringArray, {charType},
+    add("Split", stringArray, {charType},
         [this](ExecutionContext&, const Value& self, const std::vector<Value>& args) {
             const auto& text = selfString(self);
             char16_t separator = args[0].asChar();

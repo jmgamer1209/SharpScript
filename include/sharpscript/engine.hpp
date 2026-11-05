@@ -182,6 +182,7 @@ private:
                                                       bool reloading);
     void initializeStringMethods();
     void initializeExceptionTypes();
+    void initializeConsoleType();
 
     /// Declared first so it outlives modules (and the script objects they own).
     GcCollector garbageCollector_;

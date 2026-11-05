@@ -5,8 +5,8 @@
 namespace sharpscript {
 
 /// One source file of a module. AngelScript calls these "sections": they share
-/// the module's global namespace, so `player.ss` can use a class declared in
-/// `main.ss` without any import.
+/// the module's global namespace, so `player.cs` can use a class declared in
+/// `main.cs` without any import.
 struct ScriptSection {
     /// Name used in diagnostics; empty falls back to the module's source file.
     std::string file;

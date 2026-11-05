@@ -11,11 +11,11 @@ else()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# The script standard library lives in lib/*.ss so it can be edited, highlighted
+# The script standard library lives in lib/*.cs so it can be edited, highlighted
 # and validated by the CLI. It is embedded at configure time to keep the binary
 # self-contained (the AngelScript analogue: source in the repo, add-on in the SDK).
 set(SHARPSCRIPT_STDLIB_FILES
-    ${CMAKE_CURRENT_SOURCE_DIR}/lib/array.ss
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/array.cs
 )
 set(SHARPSCRIPT_GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
 set(SHARPSCRIPT_STDLIB_SOURCE "")
@@ -24,7 +24,7 @@ foreach(stdlib_file IN LISTS SHARPSCRIPT_STDLIB_FILES)
     string(APPEND SHARPSCRIPT_STDLIB_SOURCE "${stdlib_part}\n")
 endforeach()
 file(WRITE ${SHARPSCRIPT_GENERATED_DIR}/stdlib_source.hpp
-"// Generated from lib/*.ss -- do not edit.
+"// Generated from lib/*.cs -- do not edit.
 #pragma once
 
 namespace sharpscript {
@@ -73,3 +73,27 @@ target_link_libraries(sharpscript_tests PRIVATE sharpscript)
 
 enable_testing()
 add_test(NAME sharpscript_tests COMMAND sharpscript_tests)
+
+# ------------------------------------------------------------ C# compatibility
+# The standard library and the samples are meant to be valid C# as well. When a
+# .NET SDK is available, compile them with Roslyn as part of the test suite.
+find_program(SHARPSCRIPT_DOTNET_EXECUTABLE NAMES dotnet)
+if(SHARPSCRIPT_DOTNET_EXECUTABLE)
+    execute_process(COMMAND ${SHARPSCRIPT_DOTNET_EXECUTABLE} --version
+                    OUTPUT_VARIABLE SHARPSCRIPT_DOTNET_VERSION
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET)
+    if(SHARPSCRIPT_DOTNET_VERSION MATCHES "^([0-9]+)\\.")
+        set(SHARPSCRIPT_DOTNET_TFM "net${CMAKE_MATCH_1}.0")
+        add_test(NAME csharp_compat
+                 COMMAND ${CMAKE_COMMAND}
+                         -DDOTNET=${SHARPSCRIPT_DOTNET_EXECUTABLE}
+                         -DTFM=${SHARPSCRIPT_DOTNET_TFM}
+                         -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                         -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/csharp_compat
+                         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/csharp_compat.cmake)
+        message(STATUS "C# compatibility check enabled (${SHARPSCRIPT_DOTNET_TFM})")
+    endif()
+else()
+    message(STATUS "C# compatibility check disabled (no dotnet found)")
+endif()

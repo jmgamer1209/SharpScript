@@ -27,7 +27,6 @@ namespace sharpscript {
     X(Call) X(CallVirt) X(CallNative) X(CallNativeVariadic) \
     X(CallDelegate) X(NewDelegate) X(DelegateAdd) X(DelegateSub) \
     X(NewObj) X(NewArray) X(CloneStruct) X(Cast) X(IsType) \
-    X(ArrayPush) X(ArrayPop) \
     X(Throw) X(Leave) X(EndFinally) X(Ret)
 
 const char* opCodeName(OpCode op) {
