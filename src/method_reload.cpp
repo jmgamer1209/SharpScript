@@ -11,6 +11,18 @@ bool isLambdaName(const std::string& name) {
     return name.compare(0, std::char_traits<char>::length(kLambdaPrefix), kLambdaPrefix) == 0;
 }
 
+/// Passing mode suffix, so `F(ref int)` / `F(out int)` / `F(in int)` keep
+/// distinct identities: overloads only differing by mode are invalid C#, but the
+/// key must not silently pair two different declarations.
+const char* parameterModeKey(ParamModifier modifier) {
+    switch (modifier) {
+        case ParamModifier::Ref: return "&ref";
+        case ParamModifier::Out: return "&out";
+        case ParamModifier::In: return "&in";
+        default: return "";
+    }
+}
+
 /// Identity of a function across generations: owner + name + parameter types +
 /// return type. Lambdas are excluded because their names are positional and
 /// drift as soon as an unrelated lambda is added or removed.
@@ -21,7 +33,7 @@ std::string functionKey(const ScriptFunction& function) {
     key += "(";
     for (const auto& parameter : function.parameters) {
         key += parameter.type.name;
-        if (parameter.isRef()) key += "&";
+        key += parameterModeKey(parameter.modifier);
         key += ",";
     }
     key += ")->";

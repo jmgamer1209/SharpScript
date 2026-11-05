@@ -55,13 +55,12 @@ endfunction()
 set(primary ${WORK_DIR}/primary)
 file(REMOVE_RECURSE ${primary})
 write_project(${primary} primary)
-foreach(sample hello oop native)
-    file(COPY ${SOURCE_DIR}/samples/${sample}.cs DESTINATION ${primary})
-endforeach()
-# The hot reload samples define the same types as their v2 counterpart, so only
-# the first generation joins the primary project.
-file(COPY ${SOURCE_DIR}/samples/hotreload.cs DESTINATION ${primary})
-build_project(${primary} "library + hello/oop/native/hotreload")
+# Every sample joins the same library project, so they must stay valid C# both
+# individually and together (no duplicate type names). The hot reload v2 file
+# redefines the v1 types, so it is validated in its own project below.
+file(COPY ${SOURCE_DIR}/samples/ DESTINATION ${primary})
+file(REMOVE ${primary}/hotreload.v2.cs)
+build_project(${primary} "library + samples")
 
 # ---------------------------------------------------------------- project 2
 set(reload ${WORK_DIR}/reload)

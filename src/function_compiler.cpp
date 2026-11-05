@@ -987,7 +987,7 @@ ScriptType FunctionCompiler::compileIdentifier(const IdentifierExpression& ident
             return primError();
         }
         if (!property->getter->isStatic) emit(OpCode::LoadThis, 0, +1);
-        emitScriptCall(property->getter);
+        emitPropertyAccessor(property->getter);
         return property->type;
     }
 
@@ -1290,7 +1290,7 @@ ScriptType FunctionCompiler::emitMemberLoad(const MemberExpression& member, cons
         }
         if (auto* property = cls->findProperty(member.memberName)) {
             if (property->getter != nullptr) {
-                emitScriptCall(property->getter);
+                emitPropertyAccessor(property->getter);
                 return property->type;
             }
             emit(OpCode::Pop, 0, -1);
@@ -1426,6 +1426,28 @@ ScriptType FunctionCompiler::compileNamedCall(const IdentifierExpression& callee
                 } else {
                     emitScriptCall(target);
                 }
+                return target->returnType;
+            }
+        }
+    }
+
+    if (owner != nullptr && function_->owner != nullptr) {
+        // Unqualified call to a static method of the enclosing class (or one it
+        // inherits). C# resolves class members before module-level functions, and
+        // a static method has no receiver to push.
+        auto methods = staticMethods(owner, callee.name, call.arguments.size());
+        if (!methods.empty()) {
+            std::vector<std::vector<ScriptType>> lists;
+            for (auto* method : methods) {
+                std::vector<ScriptType> types;
+                for (const auto& parameter : method->parameters) types.push_back(parameter.type);
+                lists.push_back(std::move(types));
+            }
+            int index = selectOverload(lists, std::vector<bool>(methods.size(), false), call.arguments, call);
+            if (index >= 0) {
+                auto* target = methods[static_cast<std::size_t>(index)];
+                compileCallArguments(call.arguments, target->parameters, call);
+                emitScriptCall(target);
                 return target->returnType;
             }
         }
@@ -2601,7 +2623,7 @@ void FunctionCompiler::emitLValueStore(const Expression& target, const ScriptTyp
         }
         if (auto* property = findOwnerProperty(identifier->name)) {
             if (property->setter != nullptr) {
-                emitScriptCall(property->setter);   // receiver already pushed as the address
+                emitPropertyAccessor(property->setter);   // receiver already pushed as the address
                 return;
             }
             if (property->backingField != nullptr) {
@@ -2665,7 +2687,7 @@ void FunctionCompiler::emitLValueStore(const Expression& target, const ScriptTyp
                 }
                 if (auto* property = cls->findProperty(member->memberName)) {
                     if (property->setter != nullptr) {
-                        emitScriptCall(property->setter);
+                        emitPropertyAccessor(property->setter);
                         return;
                     }
                     if (property->backingField != nullptr && function_->isConstructor) {
@@ -2957,6 +2979,17 @@ void FunctionCompiler::emitNativeCall(NativeFunction* target) {
     int pops = static_cast<int>(target->parameterTypes.size()) + (target->isStatic ? 0 : 1);
     int pushes = target->returnType.isVoid() ? 0 : 1;
     emit(OpCode::CallNative, reference, pushes - pops);
+}
+
+void FunctionCompiler::emitPropertyAccessor(ScriptFunction* accessor) {
+    if (accessor == nullptr) return;
+    // Accessors are ordinary methods, so an `override` accessor already shares the
+    // base slot; calling it statically would silently ignore the override.
+    if (accessor->vtableSlot >= 0) {
+        emitVirtualCall(accessor);
+    } else {
+        emitScriptCall(accessor);
+    }
 }
 
 ScriptType FunctionCompiler::emitGetHashCode(const Node& node) {
@@ -3440,6 +3473,21 @@ std::optional<ScriptType> FunctionCompiler::inferType(const Expression& expressi
     return std::nullopt;
 }
 
+std::optional<ScriptType> FunctionCompiler::inferOverloadReturnType(
+    const std::vector<ScriptFunction*>& candidates, const CallExpression& call) {
+    if (candidates.empty()) return std::nullopt;
+    if (candidates.size() == 1) return candidates.front()->returnType;
+    std::vector<std::vector<ScriptType>> lists;
+    for (auto* method : candidates) {
+        std::vector<ScriptType> types;
+        for (const auto& parameter : method->parameters) types.push_back(parameter.type);
+        lists.push_back(std::move(types));
+    }
+    int index = selectOverload(lists, std::vector<bool>(candidates.size(), false), call.arguments, call);
+    if (index < 0) index = 0;
+    return candidates[static_cast<std::size_t>(index)]->returnType;
+}
+
 std::optional<ScriptType> FunctionCompiler::inferCallType(const CallExpression& call) {
     auto callableType = inferType(*call.callee);
     if (callableType && callableType->isDelegate()) {
@@ -3457,10 +3505,14 @@ std::optional<ScriptType> FunctionCompiler::inferCallType(const CallExpression& 
         auto* owner = dynamic_cast<ScriptClassType*>(function_->owner);
         if (owner != nullptr && !function_->isStatic) {
             auto methods = instanceMethods(owner, identifier->name, call.arguments.size());
-            if (!methods.empty()) return methods[0]->returnType;
+            if (!methods.empty()) return inferOverloadReturnType(methods, call);
+        }
+        if (owner != nullptr) {
+            auto methods = staticMethods(owner, identifier->name, call.arguments.size());
+            if (!methods.empty()) return inferOverloadReturnType(methods, call);
         }
         auto candidates = moduleFunctions(identifier->name, call.arguments.size());
-        if (!candidates.empty()) return candidates[0]->returnType;
+        if (!candidates.empty()) return inferOverloadReturnType(candidates, call);
         const auto* globals = modules_.engine().findGlobalFunctions(identifier->name);
         if (globals != nullptr) {
             for (auto* native : *globals) {
@@ -3480,7 +3532,7 @@ std::optional<ScriptType> FunctionCompiler::inferCallType(const CallExpression& 
                 if (lookupType(prefix, type)) {
                     if (auto* cls = dynamic_cast<ScriptClassType*>(type.object)) {
                         auto methods = staticMethods(cls, member->memberName, call.arguments.size());
-                        if (!methods.empty()) return methods[0]->returnType;
+                        if (!methods.empty()) return inferOverloadReturnType(methods, call);
                     }
                     if (auto* native = dynamic_cast<NativeObjectType*>(type.object)) {
                         auto* method = native->findMethod(member->memberName, call.arguments.size());
@@ -3490,13 +3542,13 @@ std::optional<ScriptType> FunctionCompiler::inferCallType(const CallExpression& 
                 }
             }
             auto candidates = moduleFunctions(chain, call.arguments.size());
-            if (!candidates.empty()) return candidates[0]->returnType;
+            if (!candidates.empty()) return inferOverloadReturnType(candidates, call);
         }
         auto targetType = inferType(*member->target);
         if (!targetType.has_value()) return std::nullopt;
         if (auto* cls = dynamic_cast<ScriptClassType*>(targetType->object)) {
             auto methods = instanceMethods(cls, member->memberName, call.arguments.size());
-            if (!methods.empty()) return methods[0]->returnType;
+            if (!methods.empty()) return inferOverloadReturnType(methods, call);
         }
         if (auto* native = dynamic_cast<NativeObjectType*>(targetType->object)) {
             auto* method = native->findMethod(member->memberName, call.arguments.size());

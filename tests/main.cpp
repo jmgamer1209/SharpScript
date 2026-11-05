@@ -488,6 +488,33 @@ void main() { ping(); ping(); }
 )",
                      {"ping", "ping"});
     });
+
+    test("overloaded calls take part in type inference", [] {
+        expectOutput(R"(
+using System;
+
+class Text {
+    public static int Size(int value) { return value * 2; }
+    public static string Size(string value) { return "s:" + value; }
+}
+
+class Calc {
+    public int Format(int value) { return value + 1; }
+    public string Format(string value) { return "v:" + value; }
+}
+
+void main() {
+    Console.WriteLine(Text.Size("abcd"));
+    Console.WriteLine(Text.Size(7));
+    string label = Text.Size("xy");
+    Console.WriteLine(label);
+
+    Calc calc = new Calc();
+    Console.WriteLine(calc.Format("hi"));
+    Console.WriteLine(calc.Format(3));
+})",
+                     {"s:abcd", "14", "s:xy", "v:hi", "4"});
+    });
 }
 
 void testGlobals() {
@@ -586,6 +613,32 @@ void main() {
     print(Counter.total());
 })",
                      {"2", "2", "2", "10"});
+    });
+
+    test("unqualified calls resolve static methods of the enclosing class", [] {
+        expectOutput(R"(
+class MathUtil {
+    public static int Double(int value) { return value * 2; }
+    public static int Quadruple(int value) { return Double(Double(value)); }
+    public int Instance(int value) { return Double(value) + 1; }
+}
+
+class Base {
+    public static string Kind() { return "base"; }
+}
+
+class Derived : Base {
+    public static string Describe() { return Kind() + "-derived"; }
+}
+
+void main() {
+    print(MathUtil.Double(3));
+    print(MathUtil.Quadruple(3));
+    MathUtil util = new MathUtil();
+    print(util.Instance(3));
+    print(Derived.Describe());
+})",
+                     {"6", "12", "7", "base-derived"});
     });
 
     test("field initializers run per instance", [] {
@@ -2655,6 +2708,45 @@ void main() {
                      {"4", "52", "9", "9"});
     });
 
+    test("virtual properties dispatch through the vtable", [] {
+        expectOutput(R"(
+class Node {
+    public virtual string Kind { get { return "node"; } }
+}
+
+class Leaf : Node {
+    public override string Kind { get { return "leaf"; } }
+}
+
+class Meter {
+    public int total;
+    public virtual int Value { get { return total; } set { total = value; } }
+}
+
+class DoublingMeter : Meter {
+    public override int Value { get { return total; } set { total = value * 2; } }
+}
+
+void main() {
+    Node node = new Node();
+    Node leaf = new Leaf();
+    print(node.Kind);
+    print(leaf.Kind);
+
+    Leaf direct = new Leaf();
+    print(direct.Kind);
+
+    Meter meter = new DoublingMeter();
+    meter.Value = 5;
+    print(meter.total);
+
+    Meter plain = new Meter();
+    plain.Value = 5;
+    print(plain.total);
+})",
+                     {"node", "leaf", "leaf", "10", "5"});
+    });
+
     test("property restrictions are diagnosed", [] {
         auto expectDiagnostic = [](const std::string& source, const std::string& code) {
             TestEngine harness;
@@ -3820,6 +3912,85 @@ void main() {
         harness.engine->invokeEntryPoint("attach");
         expectEqual(std::string("1"), harness.output[1]);
         expectEqual(std::string("5"), harness.output[2]);
+    });
+
+    test("overloads are patched per signature", [] {
+        TestEngine harness;
+        harness.load(R"(
+class Calc {
+    public static int Combine(int left, int right) { return left + right; }
+    public static string Combine(string left, string right) { return left + "|" + right; }
+    public int Twice(int value) { return value * 2; }
+    public int Twice(string value) { return value.Length * 2; }
+}
+void main() {
+    Calc calc = new Calc();
+    print(Calc.Combine(1, 2));
+    print(Calc.Combine("a", "b"));
+    print(calc.Twice(3));
+    print(calc.Twice("abcd"));
+})",
+                     "overloads");
+        harness.engine->invokeEntryPoint("overloads");
+        expectEqual(std::string("3"), harness.output[0]);
+        expectEqual(std::string("a|b"), harness.output[1]);
+        expectEqual(std::string("6"), harness.output[2]);
+        expectEqual(std::string("8"), harness.output[3]);
+
+        auto result = harness.engine->reloadModule("overloads", R"(
+class Calc {
+    public static int Combine(int left, int right) { return left * right; }
+    public static string Combine(string left, string right) { return left + "&" + right; }
+    public int Twice(int value) { return value + 100; }
+    public int Twice(string value) { return value.Length + 100; }
+}
+void main() {
+    Calc calc = new Calc();
+    print(Calc.Combine(1, 2));
+    print(Calc.Combine("a", "b"));
+    print(calc.Twice(3));
+    print(calc.Twice("abcd"));
+})",
+                                                   "overloads.cs");
+        expectTrue(result.success, result.summary());
+        expectEqual(std::string("method-body"), result.strategy);
+
+        harness.engine->invokeEntryPoint("overloads");
+        expectEqual(std::string("2"), harness.output[4]);
+        expectEqual(std::string("a&b"), harness.output[5]);
+        expectEqual(std::string("103"), harness.output[6]);
+        expectEqual(std::string("104"), harness.output[7]);
+    });
+
+    test("a new overload is attached like any added function", [] {
+        TestEngine harness;
+        harness.load(R"(
+class Calc {
+    public static int Combine(int left, int right) { return left + right; }
+    public static string Combine(string left, string right) { return left + "|" + right; }
+}
+void main() { print(Calc.Combine(1, 2)); })",
+                     "overload_added");
+        harness.engine->invokeEntryPoint("overload_added");
+        expectEqual(std::string("3"), harness.output[0]);
+
+        auto result = harness.engine->reloadModule("overload_added", R"(
+class Calc {
+    public static int Combine(int left, int right) { return left + right; }
+    public static string Combine(string left, string right) { return left + "|" + right; }
+    public static double Combine(double left, double right) { return left / right; }
+}
+void main() {
+    print(Calc.Combine(1, 2));
+    print(Calc.Combine(9.0, 2.0));
+})",
+                                                   "overload_added.cs");
+        expectTrue(result.success, result.summary());
+        expectEqual(std::string("method-body"), result.strategy);
+
+        harness.engine->invokeEntryPoint("overload_added");
+        expectEqual(std::string("3"), harness.output[1]);
+        expectEqual(std::string("4.5"), harness.output[2]);
     });
 
     test("patched bodies may create new closures of existing delegate types", [] {

@@ -35,7 +35,9 @@ cmake --build build --config Release
 
 build\Release\sharpscript_cli.exe run samples/hello.cs
 build\Release\sharpscript_cli.exe run samples/oop.cs
-build\Release\sharpscript_cli.exe run samples/native.cs
+build\Release\sharpscript_cli.exe run samples/interfaces.cs
+build\Release\sharpscript_cli.exe run samples/collections.cs
+build\Release\sharpscript_cli.exe run samples/module_main.cs samples/module_player.cs
 build\Release\sharpscript_cli.exe disasm samples/hello.cs
 build\Release\sharpscript_cli.exe reload samples/hotreload.cs samples/hotreload.v2.cs
 build\Release\sharpscript_cli.exe watch samples/hotreload.cs
@@ -65,7 +67,7 @@ cmake --build build -j
 ```powershell
 ctest --test-dir build -C Release -R csharp_compat
 # 内部会生成两个临时工程（Library 输出），用 dotnet build 编译
-# lib/*.cs + samples/{hello,oop,native,hotreload}.cs + Host 桩
+# lib/*.cs + samples/*.cs（不含 hotreload.v2.cs）+ Host 桩
 ```
 
 已对齐的部分：
@@ -83,9 +85,34 @@ ctest --test-dir build -C Release -R csharp_compat
 
 | 项 | 现状 |
 | --- | --- |
-| 其它 | `?.`、字符串插值、`out var`、`switch` 表达式、表达式体成员、特性 |
+| 其它 | `?.`、字符串插值、`switch` 表达式、表达式体成员、特性 |
 
 因此**当前样例与库**可以被 C# 编译；但只要用到上表第二组的写法就还不行。`csharp_compat` 会持续守住这条线。
+
+---
+
+## 示例脚本
+
+`samples/` 里每个文件都可以直接运行（`sharpscript_cli run samples/<name>.cs`），并且都能被 Roslyn 编译；
+`ctest` 为每个样例准备了一个 smoke 用例（`sample_*`），示例随语言演进不会悄悄失效。
+
+| 文件 | 演示内容 |
+| --- | --- |
+| `hello.cs` | 基础：变量、算术、`string.Length`、数组、`for`/`foreach`、`Array<T>` |
+| `oop.cs` | 类、继承、`virtual`/`override`、`is`/`as`、虚派发 |
+| `interfaces.cs` | `interface` 声明/实现/继承、接口数组与接口分派、`is`/`as` 判定接口 |
+| `dispose.cs` | `IDisposable` 与 `using`（正常退出、抛异常、`null` 资源） |
+| `collections.cs` | `Array<T>` / `List<T>` / `Dictionary<K,V>`、`foreach` 枚举器、`TryGetValue`、`Keys`/`Values` |
+| `structs.cs` | `struct` 值语义（赋值/数组/嵌套复制）、方法、`Equals` 值比较 |
+| `delegates.cs` | `delegate`、lambda、方法组、多播、`Func`/`Action`、闭包 |
+| `generics.cs` | 泛型类/方法、类型推断与显式泛型参数、多参数泛型、嵌套泛型 |
+| `properties.cs` | 自动/显式属性、计算属性、只读、静态、`virtual`/`override` 属性 |
+| `exceptions.cs` | `try`/`catch`/`finally`、类型化 catch、嵌套、越界异常 |
+| `refs.cs` | `ref`/`out`/`in`、`out var`、按引用修改 `struct` |
+| `controlflow.cs` | `switch`、`do/while`、`break`/`continue`、三元、位运算、显式转换、递归 |
+| `native.cs` | 宿主绑定（`Math.*`、`Host.*`）与字符串方法 |
+| `module_main.cs` + `module_player.cs` | 多文件 section 共享一个全局命名空间 |
+| `hotreload.cs` / `hotreload.v2.cs` | 热重载与状态迁移（`reload` / `watch` 命令） |
 
 ---
 
@@ -120,8 +147,8 @@ lib/array.cs           标准库：Array<T>（构建期嵌入，每个文件一�
 lib/list.cs            标准库：List<T>
 lib/dictionary.cs      标准库：Dictionary<K,V>
 cli/main.cpp           run / watch / reload / disasm / repl
-tests/main.cpp         控制台测试运行器（153 个用例）
-samples/               示例脚本
+tests/main.cpp         控制台测试运行器（158 个用例）
+samples/               示例脚本（基础/接口/集合/泛型/异常/热重载…）
 ```
 
 ---
@@ -367,9 +394,11 @@ void main() {
 - **实现方式**：属性在解析阶段被**降级为普通成员**——访问器编译成方法 `get_<Name>` / `set_<Name>`，自动属性额外生成后备字段 `__<Name>`。
   因此属性天然获得方法派发、继承、泛型单态化、热重载（方法体补丁）等已有能力，VM 与字节码层没有任何属性指令。
 - 类内部可以直接写属性名（`Health = Health - 30;`），等价于 `this.Health`；静态属性用 `Cls.Name` 访问。
+- `virtual` / `override` 属性与 C# 一样走虚表分派：`Node n = new Leaf();` 读取 `n.Kind` 调用的就是 `Leaf` 的访问器
+  （访问器本身就是普通方法，`get_`/`set_` 共享基类槽位）。
 - 只读自动属性（`{ get; }`）允许在**构造函数**里赋值（写入后备字段），与 C# 一致；在其它地方赋值报 `E0455`。
 - 诊断：只写属性被读取 `E0454`、只读属性被赋值 `E0455`、同名属性重复声明 `E0456`。
-- 限制：不支持表达式体访问器（`=>`）、自动属性初始化器（`{ get; set; } = 5;`）、`init`、接口属性；
+- 限制：不支持表达式体访问器（`=>`）、自动属性初始化器（`{ get; set; } = 5;`）、`init`；
   访问器上的修饰符（如 `private set`）会被解析但**不做访问控制**——本语言目前对字段/方法也不强制执行 `private`。
 
 ### 泛型类 / 泛型 struct
@@ -991,7 +1020,7 @@ result.fallbackReasons;      // 未能就地替换的原因（例如 "class 'Box
 | 全局变量表（名字/类型/顺序） | `LoadGlobal`/`StoreGlobal` 用索引寻址 |
 | 全局初始化器字节码 | 补丁不执行初始化器，改了会静默不生效 |
 | 新一代新增的类/委托类型 | 类型对象归属即将丢弃的模块 |
-| 每个函数的签名与虚拟槽位 | 签名变化视为“新函数”，旧对象保留 |
+| 每个函数的签名与虚拟槽位 | 签名 = 拥有者 + 名字 + 参数类型（含 `ref`/`out`/`in`）+ 返回类型 + `static`，因此**重载各自独立配对**；签名变化视为“新函数”，旧对象保留 |
 
 全部通过时 `applyMethodReload` 只替换 `code`/`constants`/`lineMap`/`localSlotCount`/`maxStack`/`handlers`，
 并把 `functionRefs`、`typeRefs`、`fieldRefs`、`delegateInfos`、`catchType` **按名字重映射回旧代对象**。
@@ -1001,7 +1030,12 @@ result.fallbackReasons;      // 未能就地替换的原因（例如 "class 'Box
 - 全局与实例状态**完全不动**，不需要迁移；
 - 新增的函数会被挂到旧模块（由 `ScriptModule::patchedDependency` 持有新一代的存储）。
 
-限制：新增/删除字段、改签名、改虚表、改全局表、新增类型、修改全局初始化器都会回退整模块；
+**重载函数**：因为函数身份包含完整签名，同名重载是彼此独立的配对项——只改 `Combine(int,int)` 时
+`Combine(string,string)` 的字节码原封不动；两个重载都改则各补一次。给已有名字**新增一个重载**等同于“新增函数”
+（挂到旧模块即可用，不会回退整模块）；删掉一个重载也不影响其余重载与仍持有旧函数指针的委托。
+改变某个重载的参数/返回类型则视为“删旧 + 增新”，同样能就地补丁（虚方法例外，见下）。
+
+限制：新增/删除字段、改**虚**方法签名（虚表槽位变化）、改全局表、新增类型、修改全局初始化器都会回退整模块；
 被替换的函数不能正处于执行中；lambda 不参与配对（按序号命名，容易错位）。
 
 ### 语义
@@ -1070,14 +1104,16 @@ build\Release\sharpscript_tests.exe
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-当前：**153 passed, 0 failed**（脚本用例）；另有 `csharp_compat` 一项，用 `dotnet build` 校验 `lib/*.cs` 与 `samples/*.cs` 是合法 C#，
-因此 `ctest` 共 **2 项测试**。
+当前：**158 passed, 0 failed**（脚本用例）。`ctest` 共 **16 项**：
+1 个单元测试（`sharpscript_tests`）+ 14 个样例 smoke（`sample_*`，逐个 `run` 并检查退出码）+ 1 个 `csharp_compat`
+（用 `dotnet build` 校验 `lib/*.cs` 与 `samples/*.cs` 是合法 C#）。
 
 覆盖：算术/位运算/浮点、类型转换、字符串（UTF-16 长度/索引、PascalCase 方法、`null` 语义）、控制流、递归、全局初始化、
-类/继承/虚派发/静态成员、数组、命名空间（嵌套、using、静态成员、同名类型、file-scoped、热重载配对）、
+类/继承/虚派发/静态成员（含无限定静态调用与继承来的静态方法）、接口（声明/实现/继承/接口分派/`is`/`as`）、
+`using`（正常与异常路径的 `Dispose`）、数组、命名空间（嵌套、using、静态成员、同名类型、file-scoped、热重载配对）、
 标准库集合（`Array<T>`/`List<T>`/`Dictionary<K,V>`、`foreach` 枚举器协议、哈希与 `Equals` 一致、扩容/删除/嵌套泛型）、
 多文件 section（共享命名空间、诊断定位、行偏移、重载与函数体热更）、
-属性（自动/显式访问器、只读与构造函数初始化、静态与继承、泛型类、复合赋值、限制诊断）、
+属性（自动/显式访问器、只读与构造函数初始化、静态与继承、`virtual`/`override` 分派、泛型类、复合赋值、限制诊断）、
 `struct` 值类型（拷贝语义、嵌套、数组/引用字段、静态成员、限制诊断、GC、宿主边界、热重载）、
 委托与 lambda（方法组、多播、Invoke、null、类型检查、lambda 推断、闭包按引用捕获、循环变量捕获、GC 环）、
 ref/out/in（引用传递、字段/数组元素/struct、out var、in 只读、引用转发、限制诊断）、

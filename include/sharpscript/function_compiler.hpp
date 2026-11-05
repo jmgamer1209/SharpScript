@@ -156,6 +156,9 @@ private:
     /// Lowers `x.GetHashCode()` (a C# `object` member) to the runtime primitive.
     /// The receiver is already on the stack.
     ScriptType emitGetHashCode(const Node& node);
+    /// Calls a property accessor with the receiver already on the stack, going
+    /// through the vtable so `virtual`/`override` properties dispatch like C#.
+    void emitPropertyAccessor(ScriptFunction* accessor);
 
     int selectOverload(const std::vector<std::vector<ScriptType>>& parameterLists,
                        const std::vector<bool>& variadic, const std::vector<ExprPtr>& arguments,
@@ -196,6 +199,10 @@ private:
 
     std::optional<ScriptType> inferType(const Expression& expression);
     std::optional<ScriptType> inferCallType(const CallExpression& call);
+    /// Return type of the overload the arguments select (falls back to the first
+    /// candidate so a reported error keeps a usable type).
+    std::optional<ScriptType> inferOverloadReturnType(const std::vector<ScriptFunction*>& candidates,
+                                                      const CallExpression& call);
     bool definitelyTerminates(const Statement& statement) const;
 
     ModuleCompiler& modules_;

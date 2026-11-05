@@ -86,6 +86,23 @@ target_link_libraries(sharpscript_tests PRIVATE sharpscript)
 enable_testing()
 add_test(NAME sharpscript_tests COMMAND sharpscript_tests)
 
+# --------------------------------------------------------------- sample smoke
+# Every runnable sample is also a smoke test: it must compile and exit cleanly, so
+# the examples cannot rot as the language evolves. `module_main.cs` needs its
+# second section, which the last entry supplies.
+set(SHARPSCRIPT_SAMPLES
+    hello oop native interfaces dispose collections structs delegates generics
+    exceptions refs properties controlflow
+)
+foreach(sample IN LISTS SHARPSCRIPT_SAMPLES)
+    add_test(NAME sample_${sample}
+             COMMAND sharpscript_cli run ${CMAKE_CURRENT_SOURCE_DIR}/samples/${sample}.cs)
+endforeach()
+add_test(NAME sample_multifile
+         COMMAND sharpscript_cli run
+                 ${CMAKE_CURRENT_SOURCE_DIR}/samples/module_main.cs
+                 ${CMAKE_CURRENT_SOURCE_DIR}/samples/module_player.cs)
+
 # ------------------------------------------------------------ C# compatibility
 # The standard library and the samples are meant to be valid C# as well. When a
 # .NET SDK is available, compile them with Roslyn as part of the test suite.
