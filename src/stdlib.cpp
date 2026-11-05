@@ -1,13 +1,19 @@
 #include "sharpscript/stdlib.hpp"
 
-// Generated from lib/array.cs at configure time (see CMakeLists.txt).
+// Generated from lib/*.cs at configure time (see CMakeLists.txt).
 #include "stdlib_source.hpp"
 
 namespace sharpscript {
 
-const std::string& scriptStandardLibrary() {
-    static const std::string source = detail::kScriptStandardLibrary;
-    return source;
+const std::vector<StandardLibraryFile>& scriptStandardLibrary() {
+    static const std::vector<StandardLibraryFile> files = [] {
+        std::vector<StandardLibraryFile> result;
+        for (const auto& entry : detail::kScriptStandardLibraryFiles) {
+            result.push_back(StandardLibraryFile{entry.file, entry.source});
+        }
+        return result;
+    }();
+    return files;
 }
 
 }  // namespace sharpscript

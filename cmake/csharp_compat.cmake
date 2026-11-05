@@ -34,7 +34,8 @@ function(write_project project_dir project_name)
     public static long GetTickCount() { return 0L; }
 }
 ")
-    file(COPY ${SOURCE_DIR}/lib/array.cs DESTINATION ${project_dir})
+    # All of lib/*.cs: Array<T>, List<T>, Dictionary<K,V>.
+    file(COPY ${SOURCE_DIR}/lib/ DESTINATION ${project_dir})
 endfunction()
 
 function(build_project project_dir label)

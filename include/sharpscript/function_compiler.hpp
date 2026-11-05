@@ -153,6 +153,9 @@ private:
     void emitScriptCall(ScriptFunction* target);
     void emitVirtualCall(ScriptFunction* target);
     void emitNativeCall(NativeFunction* target);
+    /// Lowers `x.GetHashCode()` (a C# `object` member) to the runtime primitive.
+    /// The receiver is already on the stack.
+    ScriptType emitGetHashCode(const Node& node);
 
     int selectOverload(const std::vector<std::vector<ScriptType>>& parameterLists,
                        const std::vector<bool>& variadic, const std::vector<ExprPtr>& arguments,

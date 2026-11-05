@@ -11,14 +11,16 @@
 namespace sharpscript {
 namespace {
 
-/// Appends the script standard library as its own section: declarations are
-/// visible everywhere in the module while diagnostics still point at the user's
-/// file (the library reports `<stdlib>`).
+/// Appends every standard library file (`lib/*.cs`) as its own section:
+/// declarations are visible everywhere in the module while diagnostics point at
+/// the file that actually failed (`lib/dictionary.cs(42,9): ...`).
 std::vector<ScriptSection> withStandardLibrary(const EngineSettings& settings,
                                                const std::vector<ScriptSection>& sections) {
     std::vector<ScriptSection> result = sections;
     if (settings.useScriptStandardLibrary) {
-        result.emplace_back("lib/array.cs", scriptStandardLibrary());
+        for (const auto& file : scriptStandardLibrary()) {
+            result.emplace_back(file.file, file.source);
+        }
     }
     return result;
 }
@@ -86,6 +88,17 @@ ScriptEngine::ScriptEngine() : hotReload_(std::make_unique<HotReloadManager>(*th
         [](ExecutionContext&, const Value&, const std::vector<Value>& args) {
             const bool equal = args.size() == 2 && ValueOps::areEqual(args[0], args[1]);
             return Value::boolean(equal);
+        });
+
+    // `x.GetHashCode()` is lowered to this primitive (see FunctionCompiler), the
+    // same way `x.ToString()` is, so `lib/array.cs` stays valid C# while backing
+    // `Dictionary<K,V>`. The hash is folded to 31 bits like C#'s Int32 result.
+    addGlobalFunction(
+        "GetHashCode", primI32(), {primVar()},
+        [](ExecutionContext&, const Value&, const std::vector<Value>& args) {
+            const std::uint64_t mixed = args.empty() ? 0 : ValueOps::hash(args[0]);
+            const std::uint32_t folded = static_cast<std::uint32_t>(mixed ^ (mixed >> 32));
+            return Value::i32(static_cast<std::int32_t>(folded & 0x7fffffffu));
         });
 
     addGlobalFunction(

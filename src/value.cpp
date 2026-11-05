@@ -69,6 +69,62 @@ bool structValuesEqual(const Value& a, const Value& b) {
     return true;
 }
 
+/// FNV-1a over UTF-16 code units: stable, allocation free and independent of
+/// the C++ standard library's string hash implementation.
+std::uint64_t hashText(const std::u16string& text) {
+    std::uint64_t result = 1469598103934665603ull;
+    for (char16_t unit : text) {
+        result ^= static_cast<std::uint64_t>(unit);
+        result *= 1099511628211ull;
+    }
+    return result;
+}
+
+std::uint64_t hashValue(const Value& value, int depth) {
+    switch (value.kind()) {
+        case ValueKind::Void:
+        case ValueKind::Null: return 0;
+        case ValueKind::String: return hashText(value.asString());
+        case ValueKind::Bool:
+        case ValueKind::Char:
+        case ValueKind::Int8:
+        case ValueKind::UInt8:
+        case ValueKind::Int16:
+        case ValueKind::UInt16:
+        case ValueKind::Int32:
+        case ValueKind::UInt32:
+        case ValueKind::Int64:
+        case ValueKind::UInt64: return static_cast<std::uint64_t>(value.asI64());
+        case ValueKind::Float32:
+        case ValueKind::Float64: {
+            // `compare` treats -0.0 and 0.0 as equal, so they must hash alike.
+            const double number = value.asF64();
+            if (number == 0.0) return 0;
+            return Value::bitsOf(number);
+        }
+        case ValueKind::Struct: {
+            auto structValue = value.asStruct();
+            if (!structValue) return 0;
+            std::uint64_t result = reinterpret_cast<std::uintptr_t>(structValue->type());
+            if (depth > 16) return result;
+            for (const Value& field : structValue->fields()) {
+                result = (result ^ hashValue(field, depth + 1)) * 1099511628211ull;
+            }
+            return result;
+        }
+        case ValueKind::Delegate:
+            // Delegates compare structurally; a constant keeps the "equal values
+            // hash equally" contract and only costs collisions.
+            return 0x9e3779b97f4a7c15ull;
+        case ValueKind::Object:
+        case ValueKind::Array:
+        case ValueKind::Native:
+        case ValueKind::Cell:
+        case ValueKind::Ref:
+        default: return reinterpret_cast<std::uintptr_t>(value.rawRef().get());
+    }
+}
+
 }  // namespace
 
 bool isNumericKind(ValueKind kind) {
@@ -500,6 +556,8 @@ bool areEqual(const Value& a, const Value& b) {
     }
     return compare(a, b) == 0;
 }
+
+std::uint64_t hash(const Value& value) { return hashValue(value, 0); }
 
 }  // namespace ValueOps
 

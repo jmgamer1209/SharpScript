@@ -441,6 +441,9 @@ Value bNotI64(const Value& a);
 
 int compare(const Value& a, const Value& b);
 bool areEqual(const Value& a, const Value& b);
+/// Hash consistent with `areEqual` (equal values hash equally), used by the
+/// script library hash tables such as `Dictionary<K,V>`.
+std::uint64_t hash(const Value& value);
 
 }  // namespace ValueOps
 

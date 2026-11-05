@@ -59,13 +59,13 @@ cmake --build build -j
 
 ## 与 C# 的兼容性
 
-脚本后缀是 `.cs`，语法目标是与 C# 一致，`lib/array.cs` 与 `samples/*.cs` 都能**被 Roslyn 直接编译**。
+脚本后缀是 `.cs`，语法目标是与 C# 一致，`lib/*.cs` 与 `samples/*.cs` 都能**被 Roslyn 直接编译**。
 这一点由测试套件里的 `csharp_compat` 强制校验（检测到 `dotnet` 时自动启用）：
 
 ```powershell
 ctest --test-dir build -C Release -R csharp_compat
 # 内部会生成两个临时工程（Library 输出），用 dotnet build 编译
-# lib/array.cs + samples/{hello,oop,native,hotreload}.cs + Host 桩
+# lib/*.cs + samples/{hello,oop,native,hotreload}.cs + Host 桩
 ```
 
 已对齐的部分：
@@ -75,7 +75,7 @@ ctest --test-dir build -C Release -R csharp_compat
 | 入口 | 全局 `main` / `Main`，或任意类里的 `public static void Main()` |
 | 输出 | `using System; Console.WriteLine(...)`（`print(...)` 仍是内建别名，非 C# 语法） |
 | 数组 | `T[]` 定长、`Length`、`new T[] { ... }`（无 `push`/`pop`/小写 `length`） |
-| 集合 | `Array<T>`（`Count` 为只读属性、`Add`/`Insert`/`RemoveAt`/`IndexOf`…） |
+| 集合 | `Array<T>` / `List<T>` / `Dictionary<K,V>`（脚本标准库，`Count` 为只读属性、`Add`/`Insert`/`RemoveAt`/`IndexOf`…） |
 | 类型 | class / struct / 继承 / 抽象 / 泛型类与泛型方法 / 泛型委托与变型 / 属性 / 终结器 / `where` 约束 |
 | 表达式 | lambda、`Func<>`/`Action<>`、`is`/`as`、`?.` 之外的大部分表达式 |
 
@@ -83,7 +83,7 @@ ctest --test-dir build -C Release -R csharp_compat
 
 | 项 | 现状 |
 | --- | --- |
-| 其它 | `?.`、字符串插值、`out var`、`switch` 表达式、表达式体成员、特性、`List<T>`/`Dictionary<K,V>` |
+| 其它 | `?.`、字符串插值、`out var`、`switch` 表达式、表达式体成员、特性 |
 
 因此**当前样例与库**可以被 C# 编译；但只要用到上表第二组的写法就还不行。`csharp_compat` 会持续守住这条线。
 
@@ -116,9 +116,11 @@ src/
   builder.cpp compiler.cpp function_compiler.cpp
   module.cpp engine.cpp context.cpp native.cpp
   stdlib.cpp method_reload.cpp hot_reload.cpp disassembler.cpp
-lib/array.cs           脚本标准库（构建期嵌入，见 Array<T> 一节）
+lib/array.cs           标准库：Array<T>（构建期嵌入，每个文件一个 section）
+lib/list.cs            标准库：List<T>
+lib/dictionary.cs      标准库：Dictionary<K,V>
 cli/main.cpp           run / watch / reload / disasm / repl
-tests/main.cpp         控制台测试运行器（128 个用例）
+tests/main.cpp         控制台测试运行器（153 个用例）
 samples/               示例脚本
 ```
 
@@ -269,9 +271,10 @@ void main() { Player p = new Player(); print(p.name); }
 - 诊断按 section 反查：`error("player.cs(12,5): ...")`，不再是整个模块一个文件名。
 - 重载接受同样形式的 section 列表：`engine.reloadModule("game", sections)`；方法体热更与 section 数量无关，改一个文件仍然只替换变化的函数体。
 - CLI 支持多文件：`sharpscript_cli run main.cs player.cs util.cs`（第一个文件决定模块名）。
-- 标准库本身也是一个 section（名为 `lib/array.cs`，见 `Array<T>` 一节），因此它的诊断不会污染用户文件的行号。
-- CLI 的 `--no-stdlib` 可以关掉内置库：用来单独校验 `lib/array.cs`（`sharpscript_cli --no-stdlib disasm lib/array.cs`），
-  或换成自己的实现。
+- 标准库的**每个文件**各自是一个 section（`lib/array.cs` / `lib/list.cs` / `lib/dictionary.cs`，见「脚本标准库」一节），
+  因此它的诊断不会污染用户文件的行号，也不会彼此混淆（报错直接写 `lib/dictionary.cs(42,9)`）。
+- CLI 的 `--no-stdlib` 可以关掉内置库：用来单独校验标准库
+  （`sharpscript_cli --no-stdlib disasm lib/array.cs lib/list.cs lib/dictionary.cs`），或换成自己的实现。
 - `ScriptModule::sections` / `sectionStartLines` 保留了来源信息，宿主可用 `module.fileOfLine(line)` 反查某行属于哪个文件。
 - 限制：`using` 目前是**模块级**的（不区分 section），比 C# 的“文件级 `using`”略宽松；section 不提供独立编译或独立回退，结构变化仍然整模块重载。
 
@@ -590,7 +593,7 @@ void main() {
 
 ### 语句
 
-`{ }`、`if/else`、`while`、`do/while`、`for`、`foreach (var x in arrayOrString)`、
+`{ }`、`if/else`、`while`、`do/while`、`for`、`foreach (var x in 数组/string/枚举器)`、
 `switch/case/default`、`break/continue`、`return`、`try/catch/finally`、`throw`、局部变量声明、表达式语句。
 
 ### 表达式
@@ -622,21 +625,26 @@ void main() {
 `string.Empty`、`string.IsNullOrEmpty(s)` 也可用（后者在编译期内联）。
 `null` 字符串的成员访问（如 `s.Length`）会抛出 `null reference` 运行时错误。
 
+`x.ToString()` 和 `x.GetHashCode()` 是所有类型都有的 `object` 成员：前者编译期转 `ConvStr`，后者调用运行时
+`GetHashCode` 原语（与 `Equals` 共用同一套值语义，供 `Dictionary<K,V>` 做哈希）。
+
 ### 数组
 
 `T[]` 与 C# 完全一致：只有**存储层**能力——`new T[n]` / `new T[] { ... }`、`a[i]`、`Length`。
 它是**定长**的，没有任何方法（`push` / `pop` / `insert` / `removeAt` / `clear` / `indexOf` / `contains` 全部不存在，
 调用会报 `E0446`）。越界与空引用会抛出带脚本调用栈的运行时错误。
 
-需要可增长集合时用标准库的 `Array<T>`（对应 C# 的 `List<T>`）。
+需要可增长集合、键值表时用标准库的 `Array<T>` / `List<T>` / `Dictionary<K,V>`。
 
 > 迁移提示：`a.length` → `a.Length`；`a.push(x)` → `list.Add(x)`；`a.count` → `list.Count`。
 
-### Array<T>（脚本标准库）
+### 脚本标准库：Array<T> / List<T> / Dictionary<K,V>
 
-标准库是仓库里的**真实脚本文件** `lib/array.cs`：CMake 在配置期把它嵌入生成的
-`stdlib_source.hpp`（二进制自包含），引擎再把它作为名为 `lib/array.cs` 的 section 追加到每个模块。
-目前提供 `Array<T>`：
+标准库是仓库里的**真实脚本文件**，按集合拆成三个文件：`lib/array.cs`（`Array<T>`）、`lib/list.cs`（`List<T>`）、
+`lib/dictionary.cs`（`Dictionary<K,V>` + `KeyValuePair<K,V>`）。CMake 在配置期把它们分别嵌入生成的
+`stdlib_source.hpp`（二进制自包含），引擎再把**每个文件作为独立 section** 追加到每个模块——声明在模块内全局可见，
+但诊断与反汇编会指出真正的文件与行号。每个文件都带 `using System;`（模块级 `using` 允许重复）。
+目前提供 `Array<T>`、`List<T>`、`Dictionary<K,V>` 与各自的枚举器：
 
 ```csharp
 using System;
@@ -662,22 +670,58 @@ class Demo
         names.Reserve(8);                  // 预分配容量
         names.Add("a");
         string[] raw = names.ToArray();
+
+        // List<T>：与 Array<T> 共用存储，额外提供 Remove(T)
+        List<string> list = new List<string>();
+        list.Add("ann");
+        list.Add("bob");
+        list.AddRange(new string[] { "cid" });   // 3
+        foreach (var name in list) Console.WriteLine(name);
+        Console.WriteLine(list.Remove("bob"));   // True
+        Console.WriteLine(list.Get(1));          // cid
+        Console.WriteLine(list.Count);           // 2
+
+        // Dictionary<K,V>
+        Dictionary<string, int> ages = new Dictionary<string, int>();
+        ages.Add("ann", 30);
+        ages.Set("bob", 25);                     // 插入或覆盖（indexer 赋值的等价写法）
+        Console.WriteLine(ages.Get("ann"));      // 30
+        int age = 0;
+        if (ages.TryGetValue("bob", out age)) Console.WriteLine(age);   // 25
+        foreach (var pair in ages) Console.WriteLine(pair.Key + "=" + pair.Value);
+        foreach (var key in ages.Keys) Console.WriteLine(key);
+        ages.Remove("bob");
+        ages.Clear();
     }
 }
 ```
 
-- 全部用 `T[]` 的存储原语 + 脚本循环实现，**没有专用字节码**；容量按 2 倍增长，`Reserve` 可预分配。
-- `T` 可以是原始类型、`string`、脚本 `class`、`struct`、数组、委托，甚至是 `Array<U>`（嵌套泛型）。
+- 全部用 `T[]` 的存储原语 + 脚本循环实现，**没有专用字节码**；`Array<T>`/`List<T>` 容量按 2 倍增长，`Reserve` 可预分配。
+  `Dictionary<K,V>` 是「桶数组 + 平行 `keys`/`values`/`next` 数组」的拉链法，装载因子 1.0 时翻倍重建。
+- `T` / `K` / `V` 可以是原始类型、`string`、脚本 `class`、`struct`、数组、委托，甚至泛型实例（嵌套泛型）。
+  嵌套时按语言要求写成 `Dictionary<string, List<int> >`：`>>` 会被词法器当成移位。
   元素遵循值/引用语义：`struct` 元素取值即复制，`class` 元素取值即共享。
-- 没有 `foreach`（`foreach` 只接受数组和 `string`），请用索引 `for` 或 `ForEach(Action<T>)`。
-- 语言不支持构造函数重载，因此没有 `new Array<T>(capacity)`，用 `Reserve` 代替；`Count` 是**只读属性**（`list.Count`，与 C# 一致）。
-- `Array<T>` 与其他泛型类一样是**恒定**（invariant）：`Array<Dog>` 不能赋给 `Array<Animal>`。
-- `IndexOf`/`Contains` 用内建的 `Equals(a, b)` 比较（等价于 C# 的 `object.Equals`），因此不受"泛型参数不能用 `==`"的 C# 限制；
-  比较是值语义的：原始类型按值、`struct` 逐字段、引用类型按引用身份。
+- `foreach` 走 C# 的枚举器协议（`GetEnumerator()` → `MoveNext()` / `Current`）：`Array<T>`、`List<T>`、
+  `Dictionary<K,V>` 都实现了它（字典的 `Current` 是只读的 `KeyValuePair<K,V>`）。任何脚本类型只要提供这套成员
+  也能被 `foreach`，否则报 `E0466`。
+- 语言不支持构造函数重载，因此没有 `new Array<T>(capacity)` / `new Dictionary<K,V>(capacity)`，用 `Reserve` 代替；
+  `Count` 是**只读属性**（与 C# 一致）。语言也没有 indexer，集合统一用 `Get(i)` / `Set(i, v)`。
+- `Array<T>`/`List<T>`/`Dictionary<K,V>` 与其他泛型类一样是**恒定**（invariant）：`Array<Dog>` 不能赋给 `Array<Animal>`。
+- `Array<T>`/`List<T>` 的 `IndexOf`/`Contains`/`Remove(T)` 用内建的 `Equals(a, b)` 比较（等价于 C# 的 `object.Equals`），
+  因此不受"泛型参数不能用 `==`"的 C# 限制；比较是值语义的：原始类型按值、`struct` 逐字段、引用类型按引用身份。
+- `Dictionary<K,V>` 用 `x.GetHashCode()` 求哈希、`Equals(...)` 比较键，二者语义一致（字符串按内容、`struct` 逐字段、
+  引用类型按身份）。`Add` 遇到重复键抛 `ArgumentException`，`Get` 遇到缺失键抛 `InvalidOperationException`，
+  `TryGetValue(k, out v)` 缺键时返回 `false` 并把 `v` 置为默认值，`Keys`/`Values` 返回新数组（快照）。
+  `KeyValuePair<K,V>` 这里是脚本 `class`（BCL 里是 `struct`），`foreach` 每次迭代新建一个实例。
+  哈希由运行时的 `GetHashCode` 原语提供（与 `Equals` 共用同一套值语义），因此 `Dictionary<Tag,int>` 以对象身份为键，
+  `Dictionary<Point,string>` 以字段值为键；若脚本类自己声明了 `GetHashCode()`，字典会调用它，此时需保证它的判定与
+  `Equals` 一致。
 - 不想注入这段库（例如宿主自带同名类型）时，设 `settings.useScriptStandardLibrary = false`：
-  此时 `Array<T>` 变成未知类型（`E0430`），其余语言特性不受影响。
-- 库文件可以单独校验：`sharpscript_cli --no-stdlib disasm lib/array.cs` 只编译这份脚本，
-  库语法演进时能立刻发现；它也可以被宿主自己的实现替换。
+  此时这些类型变成未知类型（`E0430`），其余语言特性不受影响。
+- 库文件可以脱离内置副本单独校验：
+  `sharpscript_cli --no-stdlib disasm lib/array.cs lib/list.cs lib/dictionary.cs` 只编译这三份脚本
+  （`disasm` 与 `run` 一样接受多个文件，其余文件成为同一模块的 section），库语法演进时能立刻发现；
+  它也可以被宿主自己的实现替换。
 
 ---
 
@@ -1026,11 +1070,12 @@ build\Release\sharpscript_tests.exe
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-当前：**142 passed, 0 failed**（脚本用例）；另有 `csharp_compat` 一项，用 `dotnet build` 校验 `lib/array.cs` 与 `samples/*.cs` 是合法 C#，
+当前：**153 passed, 0 failed**（脚本用例）；另有 `csharp_compat` 一项，用 `dotnet build` 校验 `lib/*.cs` 与 `samples/*.cs` 是合法 C#，
 因此 `ctest` 共 **2 项测试**。
 
 覆盖：算术/位运算/浮点、类型转换、字符串（UTF-16 长度/索引、PascalCase 方法、`null` 语义）、控制流、递归、全局初始化、
 类/继承/虚派发/静态成员、数组、命名空间（嵌套、using、静态成员、同名类型、file-scoped、热重载配对）、
+标准库集合（`Array<T>`/`List<T>`/`Dictionary<K,V>`、`foreach` 枚举器协议、哈希与 `Equals` 一致、扩容/删除/嵌套泛型）、
 多文件 section（共享命名空间、诊断定位、行偏移、重载与函数体热更）、
 属性（自动/显式访问器、只读与构造函数初始化、静态与继承、泛型类、复合赋值、限制诊断）、
 `struct` 值类型（拷贝语义、嵌套、数组/引用字段、静态成员、限制诊断、GC、宿主边界、热重载）、

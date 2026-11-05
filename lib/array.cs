@@ -2,11 +2,12 @@ using System;
 
 // ---------------------------------------------------------------- Array<T>
 // Script-side standard library, also valid C# so it can be compiled by Roslyn.
+// Each `lib/*.cs` file is embedded at build time and added to every module as
+// its own section, so diagnostics and `--no-stdlib` validation point at the file.
 //
 // `Array<T>` only relies on the storage primitives of `T[]` (`new T[4]`,
 // `items[i]`, `items.Length`); every algorithm is expressed in script, so the VM
-// needs no collection opcodes. This file is embedded at build time and added to
-// every module as its own section.
+// needs no collection opcodes.
 class Array<T>
 {
     private T[] items;

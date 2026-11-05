@@ -1562,6 +1562,9 @@ ScriptType FunctionCompiler::compileMemberCall(const MemberExpression& member, c
                 emit(OpCode::ConvStr, 0, 0);
                 return primString();
             }
+            if (member.memberName == "GetHashCode" && call.arguments.empty()) {
+                return emitGetHashCode(*member.target);
+            }
             modules_.error("E0328",
                            "'" + cls->name + "' has no method named '" + member.memberName + "' taking " +
                                std::to_string(call.arguments.size()) + " argument(s)",
@@ -1632,10 +1635,14 @@ ScriptType FunctionCompiler::compileMemberCall(const MemberExpression& member, c
         return target->returnType;
     }
 
-    // `ToString()` works on every type (C# object member), including strings.
+    // `ToString()` / `GetHashCode()` work on every type (C# object members),
+    // including strings.
     if (member.memberName == "ToString" && call.arguments.empty()) {
         emit(OpCode::ConvStr, 0, 0);
         return primString();
+    }
+    if (member.memberName == "GetHashCode" && call.arguments.empty()) {
+        return emitGetHashCode(*member.target);
     }
 
     if (targetType.isString()) return compileStringMethod(member, call);
@@ -2952,6 +2959,22 @@ void FunctionCompiler::emitNativeCall(NativeFunction* target) {
     emit(OpCode::CallNative, reference, pushes - pops);
 }
 
+ScriptType FunctionCompiler::emitGetHashCode(const Node& node) {
+    const auto* globals = modules_.engine().findGlobalFunctions("GetHashCode");
+    if (globals != nullptr) {
+        for (auto* native : *globals) {
+            if (native->parameterTypes.size() == 1) {
+                emitNativeCall(native);
+                return primI32();
+            }
+        }
+    }
+    modules_.error("E0341", "'GetHashCode' is not available in this engine", node);
+    emit(OpCode::Pop, 0, -1);
+    emitDefault(primI32());
+    return primI32();
+}
+
 int FunctionCompiler::selectOverload(const std::vector<std::vector<ScriptType>>& parameterLists,
                                      const std::vector<bool>& variadic,
                                      const std::vector<ExprPtr>& arguments, const Node& node) {
@@ -3366,7 +3389,11 @@ std::optional<ScriptType> FunctionCompiler::inferType(const Expression& expressi
         if (!targetType.has_value()) return std::nullopt;
         if (auto* cls = dynamic_cast<ScriptClassType*>(targetType->object)) {
             auto* field = cls->findField(member->memberName);
-            return field != nullptr ? std::optional<ScriptType>(field->type) : std::nullopt;
+            if (field != nullptr) return field->type;
+            // Properties need the same treatment as fields, otherwise overload
+            // resolution treats e.g. `list.Count` as an unknown argument type.
+            if (const auto* property = cls->findProperty(member->memberName)) return property->type;
+            return std::nullopt;
         }
         if (auto* native = dynamic_cast<NativeObjectType*>(targetType->object)) {
             if (auto* property = native->findProperty(member->memberName)) return property->type;
@@ -3485,6 +3512,7 @@ std::optional<ScriptType> FunctionCompiler::inferCallType(const CallExpression& 
         }
 
         if (member->memberName == "ToString" && call.arguments.empty()) return primString();
+        if (member->memberName == "GetHashCode" && call.arguments.empty()) return primI32();
     }
     return std::nullopt;
 }

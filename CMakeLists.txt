@@ -12,16 +12,24 @@ else()
 endif()
 
 # The script standard library lives in lib/*.cs so it can be edited, highlighted
-# and validated by the CLI. It is embedded at configure time to keep the binary
-# self-contained (the AngelScript analogue: source in the repo, add-on in the SDK).
+# and validated by the CLI. Each file is embedded separately and becomes its own
+# module section, so diagnostics name the real file and `--no-stdlib` can validate
+# one file at a time. The binary stays self-contained (the AngelScript analogue:
+# source in the repo, add-on in the SDK).
 set(SHARPSCRIPT_STDLIB_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/array.cs
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/list.cs
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/dictionary.cs
 )
 set(SHARPSCRIPT_GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
-set(SHARPSCRIPT_STDLIB_SOURCE "")
+set(SHARPSCRIPT_STDLIB_TABLE "")
 foreach(stdlib_file IN LISTS SHARPSCRIPT_STDLIB_FILES)
     file(READ ${stdlib_file} stdlib_part)
-    string(APPEND SHARPSCRIPT_STDLIB_SOURCE "${stdlib_part}\n")
+    # Section names are repo-relative: `lib/array.cs`, `lib/list.cs`, ...
+    file(RELATIVE_PATH stdlib_name ${CMAKE_CURRENT_SOURCE_DIR} ${stdlib_file})
+    string(APPEND SHARPSCRIPT_STDLIB_TABLE
+"    {\"${stdlib_name}\", R\"SS(${stdlib_part})SS\"},
+")
 endforeach()
 file(WRITE ${SHARPSCRIPT_GENERATED_DIR}/stdlib_source.hpp
 "// Generated from lib/*.cs -- do not edit.
@@ -30,9 +38,13 @@ file(WRITE ${SHARPSCRIPT_GENERATED_DIR}/stdlib_source.hpp
 namespace sharpscript {
 namespace detail {
 
-inline const char* const kScriptStandardLibrary = R\"SS(
-${SHARPSCRIPT_STDLIB_SOURCE}
-)SS\";
+struct StandardLibraryFile {
+    const char* file;
+    const char* source;
+};
+
+inline const StandardLibraryFile kScriptStandardLibraryFiles[] = {
+${SHARPSCRIPT_STDLIB_TABLE}};
 
 }  // namespace detail
 }  // namespace sharpscript

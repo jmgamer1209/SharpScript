@@ -2071,6 +2071,229 @@ void main() {
     });
 }
 
+void testCollections() {
+    test("List<T> mirrors the C# collection API", [] {
+        expectOutput(R"(
+class Player {
+    public string name;
+    public Player(string name) { this.name = name; }
+}
+
+void main() {
+    List<int> numbers = new List<int>();
+    numbers.Add(3);
+    numbers.Add(5);
+    numbers.Add(7);
+    print(numbers.Count);
+    print(numbers.Get(1));
+    print(numbers.IndexOf(7));
+    print(numbers.Contains(4));
+
+    numbers.Insert(1, 4);
+    print(numbers.Get(1));
+    numbers.Set(0, 9);
+    numbers.RemoveAt(3);
+    foreach (var n in numbers) print("n:" + n);
+
+    print(numbers.Remove(4));
+    print(numbers.Remove(4));
+    print(numbers.Count);
+
+    Array<int> range = new Array<int>();
+    range.Add(1);
+    range.Add(2);
+    numbers.AddRange(range.ToArray());
+    foreach (var n in numbers) print("m:" + n);
+
+    List<Player> players = new List<Player>();
+    players.Add(new Player("p1"));
+    print(players.Get(0).name);
+    Player[] copy = players.ToArray();
+    print(copy.Length);
+
+    numbers.Clear();
+    print(numbers.Count);
+})",
+                     {"3", "5", "2", "false", "4", "n:9", "n:4", "n:5", "true", "false", "2",
+                      "m:9", "m:5", "m:1", "m:2", "p1", "1", "0"});
+    });
+
+    test("Dictionary<K,V> provides key/value storage", [] {
+        expectOutput(R"(
+void main() {
+    Dictionary<string, int> ages = new Dictionary<string, int>();
+    ages.Add("ann", 30);
+    ages.Add("bob", 25);
+    ages.Set("ann", 31);
+    print(ages.Count);
+    print(ages.Get("ann"));
+    print(ages.ContainsKey("bob"));
+    print(ages.ContainsKey("cid"));
+
+    int age = 0;
+    bool found = ages.TryGetValue("bob", out age);
+    print(found);
+    print(age);
+    print(ages.TryGetValue("cid", out age));
+    print(age);
+
+    foreach (var pair in ages) print(pair.Key + "=" + pair.Value);
+
+    string[] names = ages.Keys;
+    int[] values = ages.Values;
+    print(names.Length);
+    print(values.Length);
+
+    print(ages.Remove("bob"));
+    print(ages.Remove("bob"));
+    print(ages.Count);
+
+    ages.Clear();
+    print(ages.Count);
+})",
+                     {"2", "31", "true", "false", "true", "25", "false", "0", "ann=31",
+                      "bob=25", "2", "2", "true", "false", "1", "0"});
+    });
+
+    test("Dictionary hashing follows Equals and survives growth", [] {
+        expectOutput(R"(
+struct Point {
+    public int x;
+    public int y;
+    public Point(int x, int y) { this.x = x; this.y = y; }
+}
+
+class Tag {
+    public string name;
+    public Tag(string name) { this.name = name; }
+}
+
+void main() {
+    Dictionary<int, string> map = new Dictionary<int, string>();
+    for (int i = 0; i < 200; i = i + 1) map.Set(i, "v" + i);
+    print(map.Count);
+    print(map.Get(199));
+    for (int i = 0; i < 200; i = i + 2) map.Remove(i);
+    print(map.Count);
+    print(map.ContainsKey(0));
+    print(map.Get(1));
+
+    Dictionary<Point, string> places = new Dictionary<Point, string>();
+    places.Add(new Point(1, 2), "a");
+    print(places.Get(new Point(1, 2)));
+    print(places.ContainsKey(new Point(2, 1)));
+
+    Tag first = new Tag("x");
+    Tag second = new Tag("x");
+    Dictionary<Tag, int> byIdentity = new Dictionary<Tag, int>();
+    byIdentity.Add(first, 7);
+    print(byIdentity.Get(first));
+    print(byIdentity.ContainsKey(second));
+
+    Dictionary<string, List<int> > groups = new Dictionary<string, List<int> >();
+    List<int> odds = new List<int>();
+    odds.Add(1);
+    groups.Add("odd", odds);
+    groups.Get("odd").Add(3);
+    print(groups.Get("odd").Count);
+
+    try {
+        map.Add(1, "again");
+        print("no throw");
+    } catch (ArgumentException e) {
+        print("duplicate: " + e.Message);
+    }
+    try {
+        map.Get(1000);
+        print("no throw");
+    } catch (InvalidOperationException e) {
+        print("missing: " + e.Message);
+    }
+})",
+                     {"200", "v199", "100", "false", "v1", "a", "false", "7", "false", "2",
+                      "duplicate: duplicate key", "missing: key not found"});
+    });
+
+    test("collections keep struct elements by value", [] {
+        expectOutput(R"(
+struct Point {
+    public int x;
+    public int y;
+    public Point(int x, int y) { this.x = x; this.y = y; }
+}
+
+void main() {
+    List<Point> path = new List<Point>();
+    path.Add(new Point(1, 2));
+    Point first = path.Get(0);
+    first.x = 99;
+    print(path.Get(0).x);
+    foreach (var p in path) print(p.x + "," + p.y);
+
+    Dictionary<int, Point> map = new Dictionary<int, Point>();
+    map.Add(7, new Point(5, 6));
+    Point stored = map.Get(7);
+    stored.x = 0;
+    print(map.Get(7).x);
+    foreach (var pair in map) print(pair.Key + ":" + pair.Value.x);
+})",
+                     {"1", "1,2", "5", "7:5"});
+    });
+
+    test("properties drive overload resolution", [] {
+        expectOutput(R"(
+using System;
+
+void main() {
+    List<int> numbers = new List<int>();
+    numbers.Add(1);
+    numbers.Add(2);
+    Console.WriteLine(numbers.Count);
+
+    Array<string> names = new Array<string>();
+    names.Add("a");
+    Console.WriteLine(names.Count);
+})",
+                     {"2", "1"});
+    });
+
+    test("GetHashCode is consistent with Equals", [] {
+        expectOutput(R"(
+struct Point {
+    public int x;
+    public int y;
+    public Point(int x, int y) { this.x = x; this.y = y; }
+}
+
+class Node {
+    public int value;
+    public Node(int value) { this.value = value; }
+}
+
+void main() {
+    string left = "value";
+    string right = "val" + "ue";
+    print(left.GetHashCode() == right.GetHashCode());
+
+    Point p = new Point(1, 2);
+    Point q = new Point(1, 2);
+    print(Equals(p, q));
+    print(p.GetHashCode() == q.GetHashCode());
+    Point swapped = new Point(2, 1);
+    print(p.GetHashCode() == swapped.GetHashCode());
+
+    Node node = new Node(1);
+    print(node.GetHashCode() == node.GetHashCode());
+
+    int number = 42;
+    print(number.GetHashCode() == number.GetHashCode());
+    double real = 1.5;
+    print(real.GetHashCode() == real.GetHashCode());
+})",
+                     {"true", "true", "true", "false", "true", "true", "true"});
+    });
+}
+
 void testSections() {
     test("sections share one global namespace", [] {
         TestEngine harness;
@@ -2104,9 +2327,11 @@ void main() {
 }
 )")},
             "multi.cs");
-        expectEqual(std::size_t{4}, module->sections.size(), "3 user sections + library");
+        expectEqual(std::size_t{6}, module->sections.size(), "3 user sections + 3 library files");
         expectEqual(std::string("main.cs"), module->sections[2].file, "last user section");
-        expectEqual(std::string("lib/array.cs"), module->sections[3].file, "library section");
+        expectEqual(std::string("lib/array.cs"), module->sections[3].file, "library section 1");
+        expectEqual(std::string("lib/list.cs"), module->sections[4].file, "library section 2");
+        expectEqual(std::string("lib/dictionary.cs"), module->sections[5].file, "library section 3");
         harness.engine->invokeEntryPoint("multi");
         expectEqual(std::string("player:hero"), harness.output[0]);
         expectEqual(std::string("1"), harness.output[1]);
@@ -2184,11 +2409,17 @@ void main() {
         expectEqual(std::string("6"), harness.output[2]);
     });
 
-    test("the standard library is its own section", [] {
+    test("every standard library file is its own section", [] {
         TestEngine harness;
         auto module = harness.load("void main() { }", "stdlib_section");
-        expectTrue(!module->sections.empty(), "expected sections");
-        expectEqual(std::string("lib/array.cs"), module->sections.back().file, "library section name");
+        expectEqual(std::size_t{4}, module->sections.size(), "user section + 3 library files");
+        expectEqual(std::string("lib/array.cs"), module->sections[1].file, "library section name");
+        expectEqual(std::string("lib/list.cs"), module->sections[2].file, "library section name");
+        expectEqual(std::string("lib/dictionary.cs"), module->sections[3].file, "library section name");
+        // The embedded copy is line-aligned with the file on disk, so a library
+        // diagnostic can be navigated to directly.
+        expectEqual(std::string("lib/array.cs"), module->fileOfLine(module->sectionStartLines[1]),
+                    "library line mapping");
     });
 }
 
@@ -3773,6 +4004,7 @@ int main() {
     testAdvancedGenerics();
     testFuncAction();
     testScriptStandardLibrary();
+    testCollections();
     testSections();
     testInterfaces();
     testProperties();
