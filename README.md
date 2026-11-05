@@ -238,7 +238,7 @@ C# 的值语义：
 复制点由 `CloneStruct` 指令生成独立副本，嵌套 struct 递归复制；数组/字段读取返回存储中的 box，
 因此 `arr[i].x = 1`、`obj.field.Method()` 会修改真实存储，而 `var copy = obj.field;` 得到副本。
 
-> 暂未实现：`readonly struct`、`ref`/`in` 参数、`object` 装箱（`object` 类型本身尚未支持）、自定义运算符与 `ToString` 重载。
+> 暂未实现：`readonly struct`、`object` 装箱（`object` 类型本身尚未支持）、自定义运算符与 `ToString` 重载。
 
 ### 命名空间（C# 风格）
 
